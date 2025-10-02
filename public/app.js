@@ -56,12 +56,35 @@ class TimetableApp {
 
             const data = await response.json();
 
-            this.availableWeeks = data.weeks;
-            this.availableClasses = data.classes;
+            // Enhance weeks with start/end range and current-week flag
+            this.availableWeeks = (data.weeks || []).map(w => {
+                const m = (w.label || '').match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+                let display = w.label;
+                let startDate = null;
+                let endDate = null;
+                let isCurrent = false;
+                if (m) {
+                    const d = parseInt(m[1], 10);
+                    const mo = parseInt(m[2], 10) - 1;
+                    const y = parseInt(m[3], 10);
+                    startDate = new Date(y, mo, d);
+                    endDate = new Date(y, mo, d + 4); // Mon-Fri range
+                    const fmt = (date) => `${date.getDate()}.${date.getMonth() + 1}.`;
+                    display = `${fmt(startDate)} - ${fmt(endDate)}`;
+                    const now = new Date();
+                    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+                    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+                    isCurrent = today >= start && today <= end;
+                }
+                return { ...w, display, startDate, endDate, isCurrent };
+            });
+            this.availableClasses = data.classes || [];
 
-            if (this.availableWeeks.length > 0) {
-                this.weekNumber = this.availableWeeks[0].value;
-            }
+            // Default to current week if exists; otherwise first
+            const current = this.availableWeeks.find(w => w.isCurrent);
+            if (current) this.weekNumber = current.value;
+            else if (this.availableWeeks.length > 0) this.weekNumber = this.availableWeeks[0].value;
 
             this.renderWeekSelect();
             this.renderClassSelect();
@@ -72,9 +95,10 @@ class TimetableApp {
 
     renderWeekSelect() {
         const select = document.getElementById('weekSelect');
-        select.innerHTML = this.availableWeeks.map(week =>
-            `<option value="${week.value}" ${week.value === this.weekNumber ? 'selected' : ''}>${week.label}</option>`
-        ).join('');
+        select.innerHTML = this.availableWeeks.map(week => {
+            const text = `${week.display || week.label}${week.isCurrent ? ' (current)' : ''}`;
+            return `<option value="${week.value}" ${week.value === this.weekNumber ? 'selected' : ''}>${text}</option>`;
+        }).join('');
     }
 
     renderClassSelect() {
@@ -86,6 +110,13 @@ class TimetableApp {
 
     async fetchTimetable() {
         this.loading = true;
+        // Disable controls while loading
+        [
+            document.getElementById('refreshBtn'),
+            document.getElementById('exportAllBtn'),
+            document.getElementById('weekSelect'),
+            document.getElementById('classSelect')
+        ].forEach(el => { if (el) el.disabled = true; });
         this.render();
 
         try {
@@ -102,6 +133,13 @@ class TimetableApp {
         } finally {
             this.loading = false;
             this.render();
+            // Re-enable controls
+            [
+                document.getElementById('refreshBtn'),
+                document.getElementById('exportAllBtn'),
+                document.getElementById('weekSelect'),
+                document.getElementById('classSelect')
+            ].forEach(el => { if (el) el.disabled = false; });
         }
     }
 
@@ -115,7 +153,7 @@ class TimetableApp {
         if (bigFont) result.className = bigFont.textContent.trim();
 
         const selectedWeek = this.availableWeeks.find(w => w.value === this.weekNumber);
-        if (selectedWeek) result.weekLabel = selectedWeek.label;
+        if (selectedWeek) result.weekLabel = selectedWeek.display || selectedWeek.label;
 
         const table = doc.querySelector('table[border="3"]');
         if (!table) return result;
@@ -342,7 +380,8 @@ END:VEVENT
         this.hideError();
 
         if (this.timetable?.className) {
-            document.getElementById('subtitle').textContent = this.timetable.className;
+            const label = this.timetable.weekLabel ? ` — ${this.timetable.weekLabel}` : '';
+            document.getElementById('subtitle').textContent = `${this.timetable.className}${label}`;
             document.getElementById('exportAllBtn').style.display = 'flex';
         }
 

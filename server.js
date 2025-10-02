@@ -6,65 +6,53 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// In-memory caches to improve performance and reduce upstream load
+const optionsCache = { data: null, expiresAt: 0 };
+const OPTIONS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const timetableCache = new Map(); // key: url, value: { body, expiresAt }
+const TIMETABLE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
 app.use(cors());
 
 // API routes must come BEFORE static file serving
-// Get available weeks and classes - dynamically parsed from sample pages
+// Get available weeks and classes - parsed from sample page and cached
 app.get('/api/options', async (req, res) => {
   try {
+    const now = Date.now();
+    if (optionsCache.data && optionsCache.expiresAt > now) {
+      return res.json(optionsCache.data);
+    }
+
     // Fetch a sample page to extract metadata
     const sampleUrl = 'https://sckr.si/vss/urniki/c/40/c00001.htm';
     const response = await fetch(sampleUrl);
     const html = await response.text();
 
-    // Parse weeks and classes from the page
+    // Parse weeks from the <select name="week"> options on the page
     const weeks = [];
+    const selectMatch = html.match(/<select[^>]*name=\"week\"[^>]*>([\s\S]*?)<\/select>/i);
+    if (selectMatch) {
+      const inner = selectMatch[1];
+      const optionRegex = /<option\s+value=\"(\d{1,2})\"[^>]*>([^<]+)<\/option>/gi;
+      let m;
+      while ((m = optionRegex.exec(inner)) !== null) {
+        const weekValue = m[1];
+        const dateText = m[2].trim(); // e.g., 29.9.2025
+        weeks.push({ value: weekValue, label: dateText });
+      }
+    }
+
+    // Classes: attempt to parse current class name as default, fallback to static
     const classes = [];
-
-    // Extract weeks - check multiple week numbers to find available ones
-    const weekNumbers = [38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 1, 2, 3, 4, 5];
-    for (const week of weekNumbers) {
-      try {
-        const testUrl = `https://sckr.si/vss/urniki/c/${week}/c00001.htm`;
-        const testResponse = await fetch(testUrl, { method: 'HEAD' });
-        if (testResponse.ok) {
-          weeks.push({ value: week.toString(), label: `Teden ${week}` });
-        }
-      } catch (err) {
-        // Skip unavailable weeks
-      }
-      if (weeks.length >= 10) break; // Limit to 10 weeks
+    const headerMatch = html.match(/<font\s+size=\"7\"[^>]*>([^<]+)<\/font>/i);
+    if (headerMatch) {
+      const defaultClassName = headerMatch[1]
+        .trim()
+        .replace(/\r?\n/g, '')
+        .replace(/&nbsp;/g, '')
+        .trim();
+      classes.push({ value: '2', label: defaultClassName || 'RAI 2.l' });
     }
-
-    // Extract classes - try class numbers 1-50
-    for (let i = 1; i <= 50; i++) {
-      try {
-        const paddedNum = i.toString().padStart(5, '0');
-        const testUrl = `https://sckr.si/vss/urniki/c/40/c${paddedNum}.htm`;
-        const testResponse = await fetch(testUrl);
-
-        if (testResponse.ok) {
-          const pageHtml = await testResponse.text();
-          // Extract class name from the page
-          const classMatch = pageHtml.match(/<font size="7"[^>]*>([^<]+)<\/font>/);
-          if (classMatch) {
-            const className = classMatch[1].trim().replace(/\r?\n/g, '').replace(/&nbsp;/g, '').trim();
-            classes.push({ value: i.toString(), label: className });
-          }
-        }
-      } catch (err) {
-        // Skip unavailable classes
-      }
-    }
-
-    // Fallback to hardcoded options if parsing fails
-    if (weeks.length === 0) {
-      weeks.push(
-        { value: '40', label: 'Teden 40' },
-        { value: '41', label: 'Teden 41' }
-      );
-    }
-
     if (classes.length === 0) {
       classes.push(
         { value: '1', label: 'RAI 1.l' },
@@ -72,7 +60,17 @@ app.get('/api/options', async (req, res) => {
       );
     }
 
-    res.json({ weeks, classes });
+    if (weeks.length === 0) {
+      weeks.push(
+        { value: '40', label: '29.9.2025' },
+        { value: '41', label: '6.10.2025' }
+      );
+    }
+
+    const payload = { weeks, classes };
+    optionsCache.data = payload;
+    optionsCache.expiresAt = now + OPTIONS_TTL_MS;
+    res.json(payload);
   } catch (error) {
     console.error('Error fetching options:', error);
     res.status(500).json({ error: error.message });
@@ -90,6 +88,13 @@ app.get('/api/timetable/:week/:classNum', async (req, res) => {
   console.log(`Fetching: ${url}`);
 
   try {
+    const cached = timetableCache.get(url);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(cached.body);
+    }
+
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -99,6 +104,7 @@ app.get('/api/timetable/:week/:classNum', async (req, res) => {
     }
 
     const html = await response.text();
+    timetableCache.set(url, { body: html, expiresAt: now + TIMETABLE_TTL_MS });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
   } catch (error) {
