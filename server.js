@@ -15,61 +15,97 @@ const TIMETABLE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 app.use(cors());
 
 // API routes must come BEFORE static file serving
-// Get available weeks and classes - parsed from sample page and cached
+// Get available weeks and classes - actively probed from source and cached
 app.get('/api/options', async (req, res) => {
   try {
     const now = Date.now();
-    if (optionsCache.data && optionsCache.expiresAt > now) {
+    // Allow bypass cache for troubleshooting: /api/options?nocache=1
+    const noCache = req.query && (req.query.nocache === '1' || req.query.nocache === 'true');
+    if (!noCache && optionsCache.data && optionsCache.expiresAt > now) {
       return res.json(optionsCache.data);
     }
 
-    // Fetch a sample page to extract metadata
-    const sampleUrl = 'https://sckr.si/vss/urniki/c/40/c00001.htm';
-    const response = await fetch(sampleUrl);
-    const html = await response.text();
+    // Utilities for ISO week calculations
+    const getIsoWeekInfo = (d) => {
+      const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      const dayNum = date.getUTCDay() || 7;
+      date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+      const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+      return { weekNo, year: date.getUTCFullYear() };
+    };
+    const mondayOfIsoWeek = (week, year) => {
+      const simple = new Date(Date.UTC(year, 0, 1 + (week - 1) * 7));
+      const dow = simple.getUTCDay() || 7;
+      const start = new Date(simple);
+      start.setUTCDate(simple.getUTCDate() + (1 - dow));
+      return start;
+    };
+    const formatDMY = (d) => `${d.getUTCDate()}.${d.getUTCMonth() + 1}.${d.getUTCFullYear()}`;
 
-    // Parse weeks from the <select name="week"> options on the page
+    // Probe available weeks by checking for existence of at least one class page for each week
+    const anchors = ['00001', '00002', '00003'];
+    const existsForWeek = async (week) => {
+      for (const anchor of anchors) {
+        const testUrl = `https://sckr.si/vss/urniki/c/${week}/c${anchor}.htm`;
+        try {
+          const r = await fetch(testUrl, { method: 'HEAD' });
+          if (r.ok) return true;
+        } catch (_) { /* ignore */ }
+      }
+      return false;
+    };
+
+    const today = new Date();
+    const { weekNo, year } = getIsoWeekInfo(today);
+    const candidateWeeks = [];
+    const pushWeek = (w) => { if (w >= 1 && w <= 53 && !candidateWeeks.includes(w)) candidateWeeks.push(w); };
+    for (let i = -8; i <= 12; i++) pushWeek(weekNo + i);
+
     const weeks = [];
-    const selectMatch = html.match(/<select[^>]*name=\"week\"[^>]*>([\s\S]*?)<\/select>/i);
-    if (selectMatch) {
-      const inner = selectMatch[1];
-      const optionRegex = /<option\s+value=\"(\d{1,2})\"[^>]*>([^<]+)<\/option>/gi;
-      let m;
-      while ((m = optionRegex.exec(inner)) !== null) {
-        const weekValue = m[1];
-        const dateText = m[2].trim(); // e.g., 29.9.2025
-        weeks.push({ value: weekValue, label: dateText });
+    for (const w of candidateWeeks) {
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await existsForWeek(w);
+      if (ok) {
+        const monday = mondayOfIsoWeek(w, year);
+        weeks.push({ value: String(w), label: formatDMY(monday) });
       }
     }
 
-    // Classes: attempt to parse current class name as default, fallback to static
+    // Build class list by scanning a representative week (prefer current if available)
     const classes = [];
-    const headerMatch = html.match(/<font\s+size=\"7\"[^>]*>([^<]+)<\/font>/i);
-    if (headerMatch) {
-      const defaultClassName = headerMatch[1]
-        .trim()
-        .replace(/\r?\n/g, '')
-        .replace(/&nbsp;/g, '')
-        .trim();
-      classes.push({ value: '2', label: defaultClassName || 'RAI 2.l' });
-    }
-    if (classes.length === 0) {
-      classes.push(
-        { value: '1', label: 'RAI 1.l' },
-        { value: '2', label: 'RAI 2.l' }
-      );
-    }
-
-    if (weeks.length === 0) {
-      weeks.push(
-        { value: '40', label: '29.9.2025' },
-        { value: '41', label: '6.10.2025' }
-      );
+    const scanWeek = weeks.length ? weeks[0].value : String(weekNo);
+    let consecutiveMisses = 0;
+    const MAX_MISSES = 30;
+    for (let i = 1; i <= 300 && consecutiveMisses < MAX_MISSES; i++) {
+      const id = String(i).padStart(5, '0');
+      const url = `https://sckr.si/vss/urniki/c/${scanWeek}/c${id}.htm`;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const resp = await fetch(url);
+        if (!resp.ok) { consecutiveMisses++; continue; }
+        const page = await resp.text();
+        const m = page.match(/<font\s+size=\"7\"[^>]*>([^<]+)<\/font>/i);
+        if (m) {
+          const label = m[1].replace(/\r?\n/g, '').replace(/&nbsp;/g, '').trim();
+          classes.push({ value: String(i), label });
+          consecutiveMisses = 0; // reset on hit
+        } else {
+          consecutiveMisses++;
+        }
+      } catch (_) {
+        consecutiveMisses++;
+      }
     }
 
     const payload = { weeks, classes };
-    optionsCache.data = payload;
-    optionsCache.expiresAt = now + OPTIONS_TTL_MS;
+    if (!noCache && weeks.length && classes.length) {
+      optionsCache.data = payload;
+      optionsCache.expiresAt = now + OPTIONS_TTL_MS;
+    } else {
+      optionsCache.data = null;
+      optionsCache.expiresAt = 0;
+    }
     res.json(payload);
   } catch (error) {
     console.error('Error fetching options:', error);

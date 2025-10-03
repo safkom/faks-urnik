@@ -206,6 +206,11 @@ body {
     box-shadow: var(--shadow-lg);
 }
 
+.day-card.current {
+    border-color: var(--accent-secondary);
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25), var(--shadow-md);
+}
+
 .day-header {
     background: linear-gradient(90deg, var(--accent-primary), var(--accent-hover));
     color: white;

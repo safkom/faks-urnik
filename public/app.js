@@ -3,7 +3,7 @@ class TimetableApp {
     constructor() {
         this.timetable = null;
         this.loading = false;
-        this.selectedClass = '2';
+        this.selectedClass = localStorage.getItem('selectedClass') || '2';
         this.weekNumber = '40';
         this.availableWeeks = [];
         this.availableClasses = [];
@@ -39,12 +39,15 @@ class TimetableApp {
     setupEventListeners() {
         document.getElementById('refreshBtn').addEventListener('click', () => this.fetchTimetable());
         document.getElementById('exportAllBtn').addEventListener('click', () => this.downloadAllICS());
+        const todayBtn = document.getElementById('todayBtn');
+        if (todayBtn) todayBtn.addEventListener('click', () => this.scrollToToday());
         document.getElementById('weekSelect').addEventListener('change', (e) => {
             this.weekNumber = e.target.value;
             this.fetchTimetable();
         });
         document.getElementById('classSelect').addEventListener('change', (e) => {
             this.selectedClass = e.target.value;
+            try { localStorage.setItem('selectedClass', this.selectedClass); } catch {}
             this.fetchTimetable();
         });
     }
@@ -400,48 +403,51 @@ END:VEVENT
             return;
         }
 
-        const html = this.timetable.days.map(day => `
-            <div class="day-card">
+        const todayName = this.getTodayName();
+        const html = this.timetable.days.map(day => {
+            const isToday = (todayName && (day.day || '').includes(todayName)) || this.isTodayByDate(day.day);
+            return `
+            <div class="day-card${isToday ? ' current' : ''}">
                 <div class="day-header">${day.day}</div>
                 <div class="day-content">
-                    ${day.note ? `<div class="day-note">${day.note}</div>` :
-                      day.classes.length === 0 ? `<div class="day-empty">No classes</div>` :
+                    ${day.note ? `<div class=\"day-note\">${day.note}</div>` :
+                      day.classes.length === 0 ? `<div class=\"day-empty\">No classes</div>` :
                       day.classes.map((cls, idx) => `
-                        <div class="class-item" style="background-color: ${cls.color || '#EEF2FF'}">
-                            <div class="class-header">
-                                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                                    <span class="class-badge">${cls.subject}</span>
-                                    ${cls.note ? `<span class="class-note">${cls.note}</span>` : ''}
+                        <div class=\"class-item\" style=\"background-color: ${cls.color || '#EEF2FF'}\">
+                            <div class=\"class-header\">
+                                <div style=\"display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;\">
+                                    <span class=\"class-badge\">${cls.subject}</span>
+                                    ${cls.note ? `<span class=\"class-note\">${cls.note}</span>` : ''}
                                 </div>
-                                <button class="btn-icon" onclick="app.downloadICS(${JSON.stringify(cls).replace(/"/g, '&quot;')})" title="Export to calendar">
-                                    <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                        <polyline points="7 10 12 15 17 10"></polyline>
-                                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                                <button class=\"btn-icon\" onclick=\"app.downloadICS(${JSON.stringify(cls).replace(/\\"/g, '&quot;')})\" title=\"Export to calendar\">
+                                    <svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                                        <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"></path>
+                                        <polyline points=\"7 10 12 15 17 10\"></polyline>
+                                        <line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"></line>
                                     </svg>
                                 </button>
                             </div>
-                            <div class="class-details">
-                                <div class="detail-item">
-                                    <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <circle cx="12" cy="12" r="10"></circle>
-                                        <polyline points="12 6 12 12 16 14"></polyline>
+                            <div class=\"class-details\">
+                                <div class=\"detail-item\">
+                                    <svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                                        <circle cx=\"12\" cy=\"12\" r=\"10\"></circle>
+                                        <polyline points=\"12 6 12 12 16 14\"></polyline>
                                     </svg>
                                     ${this.getTimeForSlot(cls.slot, cls.duration)}
                                 </div>
                                 ${cls.teacher ? `
-                                <div class="detail-item">
-                                    <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                                        <circle cx="12" cy="7" r="4"></circle>
+                                <div class=\"detail-item\">
+                                    <svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                                        <path d=\"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2\"></path>
+                                        <circle cx=\"12\" cy=\"7\" r=\"4\"></circle>
                                     </svg>
                                     ${cls.teacher}
                                 </div>` : ''}
                                 ${cls.room ? `
-                                <div class="detail-item">
-                                    <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                                        <circle cx="12" cy="10" r="3"></circle>
+                                <div class=\"detail-item\">
+                                    <svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                                        <path d=\"M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z\"></path>
+                                        <circle cx=\"12\" cy=\"10\" r=\"3\"></circle>
                                     </svg>
                                     Room ${cls.room}
                                 </div>` : ''}
@@ -449,10 +455,37 @@ END:VEVENT
                         </div>
                     `).join('')}
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
 
         document.getElementById('content').innerHTML = html;
+    }
+
+    getTodayName() {
+        const days = [null, 'Ponedeljek', 'Torek', 'Sreda', 'Četrtek', 'Petek'];
+        const dow = new Date().getDay();
+        return days[dow] || null;
+    }
+
+    isTodayByDate(dayHeaderText) {
+        const d = new Date();
+        const day = d.getDate();
+        const mon = d.getMonth() + 1;
+        const pat = new RegExp(`\\b${day}\\.\\s*${mon}\\.`);
+        return pat.test(dayHeaderText || '');
+    }
+
+    scrollToToday() {
+        const todayName = this.getTodayName();
+        const cards = Array.from(document.querySelectorAll('.day-card'));
+        let target = null;
+        for (const card of cards) {
+            const header = card.querySelector('.day-header');
+            const text = header?.textContent || '';
+            if ((todayName && text.includes(todayName)) || this.isTodayByDate(text)) { target = card; break; }
+        }
+        if (!target && cards.length) target = cards[0];
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 
