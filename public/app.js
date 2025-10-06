@@ -3,11 +3,13 @@ class TimetableApp {
     constructor() {
         this.timetable = null;
         this.loading = false;
-        this.selectedClass = localStorage.getItem('selectedClass') || '2';
+        this.preferences = this.loadPreferences();
+        this.selectedClass = this.preferences.defaultClass || '2';
         this.weekNumber = '40';
         this.availableWeeks = [];
         this.availableClasses = [];
-        this.selectedSkupine = {}; // Store selected skupina per subject
+        this.selectedSkupine = this.preferences.selectedSkupine || {}; // Store selected skupina per subject
+        this.tempPreferences = null; // For storing temporary settings during modal editing
 
         this.timeSlots = [
             { id: 1, start: '7:15', end: '8:00' },
@@ -33,23 +35,64 @@ class TimetableApp {
 
     async init() {
         await this.fetchOptions();
-        await this.fetchTimetable();
+
+        // Check if this is first time user
+        if (!this.preferences.onboardingComplete) {
+            this.showOnboarding();
+        } else {
+            await this.fetchTimetable();
+        }
+
         this.setupEventListeners();
+    }
+
+    loadPreferences() {
+        try {
+            const stored = localStorage.getItem('userPreferences');
+            if (stored) {
+                return JSON.parse(stored);
+            }
+        } catch (e) {
+            console.error('Error loading preferences:', e);
+        }
+        return {
+            onboardingComplete: false,
+            defaultClass: null,
+            selectedSkupine: {}
+        };
+    }
+
+    savePreferences() {
+        try {
+            localStorage.setItem('userPreferences', JSON.stringify(this.preferences));
+        } catch (e) {
+            console.error('Error saving preferences:', e);
+        }
     }
 
     setupEventListeners() {
         document.getElementById('refreshBtn').addEventListener('click', () => this.fetchTimetable());
         document.getElementById('exportAllBtn').addEventListener('click', () => this.downloadAllICS());
+        document.getElementById('settingsBtn').addEventListener('click', () => this.openSettings());
+
         const todayBtn = document.getElementById('todayBtn');
         if (todayBtn) todayBtn.addEventListener('click', () => this.scrollToToday());
+
         document.getElementById('weekSelect').addEventListener('change', (e) => {
             this.weekNumber = e.target.value;
             this.fetchTimetable();
         });
+
         document.getElementById('classSelect').addEventListener('change', (e) => {
             this.selectedClass = e.target.value;
-            try { localStorage.setItem('selectedClass', this.selectedClass); } catch {}
+            this.preferences.defaultClass = this.selectedClass;
+            this.savePreferences();
             this.fetchTimetable();
+        });
+
+        // Close modals when clicking outside
+        document.getElementById('settingsModal').addEventListener('click', (e) => {
+            if (e.target.id === 'settingsModal') this.closeSettings();
         });
     }
 
@@ -164,12 +207,26 @@ class TimetableApp {
         if (!table) return result;
 
         const rows = Array.from(table.querySelectorAll('tr'));
-        const processedDays = new Set(); // Track day names, not row indices
+
+        // Build a grid to track which columns are occupied and what content they have
+        const grid = [];
+        const MAX_COLS = 34; // 16 slots * 2 columns + 2 for day cell
+
+        // First pass: build the grid and collect all cells
+        let currentDay = null;
+        let currentDayStartRow = -1;
+        const dayClassCellsByColspan = new Map(); // Map from day name to Map(colspan -> cellStartColumn)
+        const dayData = new Map(); // Map from day name to {day, classes, note}
 
         rows.forEach((row, rowIdx) => {
-            const cells = Array.from(row.querySelectorAll('td'));
+            // Get only direct child td elements, not nested ones
+            const cells = Array.from(row.children).filter(el => el.tagName === 'TD');
             if (cells.length === 0) return;
 
+            // Initialize grid row
+            if (!grid[rowIdx]) grid[rowIdx] = [];
+
+            // Check if this row starts a new day
             const dayCell = cells.find(cell => {
                 const boldFont = cell.querySelector('font[size="4"] b');
                 if (boldFont) {
@@ -185,92 +242,157 @@ class TimetableApp {
                 const boldFont = dayCell.querySelector('font[size="4"] b');
                 const dayName = boldFont.textContent.trim();
 
-                // Skip if we've already processed this day
-                if (processedDays.has(dayName)) return;
-                processedDays.add(dayName);
-
+                // Check for note
                 const noteCell = cells.find(c => {
                     const font = c.querySelector('font[size="3"]');
                     return font && (font.textContent.includes('Pred začet') ||
                                    font.textContent.includes('šol.leta'));
                 });
 
-                if (noteCell) {
-                    const font = noteCell.querySelector('font[size="3"]');
-                    result.days.push({ day: dayName, classes: [], note: font.textContent.trim() });
-                } else {
-                    const dayClasses = [];
-
-                    for (let i = 1; i < cells.length; i++) {
-                        const cell = cells[i];
-                        const bgcolor = cell.getAttribute('bgcolor');
-                        if (!bgcolor) continue;
-
-                        const colspan = parseInt(cell.getAttribute('colspan') || '2');
-                        const innerTable = cell.querySelector('table');
-                        if (!innerTable) continue;
-
-                        let prevSibling = cell;
-                        let columnCount = 0;
-
-                        while (prevSibling = prevSibling.previousElementSibling) {
-                            if (prevSibling === cells[0]) break;
-                            columnCount += parseInt(prevSibling.getAttribute('colspan') || '2');
-                        }
-
-                        const slotNum = Math.floor(columnCount / 2) + 1;
-                        const classInfo = {
-                            slot: slotNum,
-                            subject: '',
-                            teacher: '',
-                            room: '',
-                            note: '',
-                            skupina: null,
-                            duration: colspan / 2,
-                            color: bgcolor,
-                            dayName: dayName
-                        };
-
-                        const innerRows = Array.from(innerTable.querySelectorAll('tr'));
-
-                        if (innerRows[0]) {
-                            const firstRowCells = Array.from(innerRows[0].querySelectorAll('td'));
-                            firstRowCells.forEach(td => {
-                                const font = td.querySelector('font[size="2"]');
-                                if (font) {
-                                    const text = font.textContent.trim();
-                                    if (text.includes('Skupina')) {
-                                        classInfo.note = text;
-                                        // Extract skupina number (e.g., "Skupina 1" -> 1)
-                                        const match = text.match(/Skupina\s+(\d+)/i);
-                                        if (match) classInfo.skupina = parseInt(match[1], 10);
-                                    } else if (!classInfo.teacher) {
-                                        classInfo.teacher = text;
-                                    }
-                                }
-                            });
-                        }
-
-                        if (innerRows[1]) {
-                            const secondRowCells = Array.from(innerRows[1].querySelectorAll('td'));
-                            secondRowCells.forEach(td => {
-                                const boldSubject = td.querySelector('font[size="3"] b');
-                                if (boldSubject) classInfo.subject = boldSubject.textContent.trim();
-
-                                const fonts = Array.from(td.querySelectorAll('font[size="2"]'));
-                                fonts.forEach(font => {
-                                    const text = font.textContent.trim();
-                                    if (text.match(/^\d+$/)) classInfo.room = text;
-                                });
-                            });
-                        }
-
-                        if (classInfo.subject) dayClasses.push(classInfo);
+                if (!dayData.has(dayName)) {
+                    if (noteCell) {
+                        const font = noteCell.querySelector('font[size="3"]');
+                        dayData.set(dayName, { day: dayName, classes: [], note: font.textContent.trim() });
+                    } else {
+                        currentDay = dayName;
+                        currentDayStartRow = rowIdx;
+                        dayClassCellsByColspan.set(dayName, new Map());
+                        dayData.set(dayName, { day: dayName, classes: [], note: null });
                     }
-
-                    result.days.push({ day: dayName, classes: dayClasses, note: null });
                 }
             }
+
+            // Process all cells and place them in the grid
+            let columnPosition = 0;
+
+            for (let i = 0; i < cells.length; i++) {
+                const cell = cells[i];
+
+                // Skip to next free column
+                while (grid[rowIdx][columnPosition] !== undefined && columnPosition < MAX_COLS) {
+                    columnPosition++;
+                }
+
+                const colspan = parseInt(cell.getAttribute('colspan') || '1');
+                const rowspan = parseInt(cell.getAttribute('rowspan') || '1');
+
+                // Store the start column for this cell
+                let cellStartColumn = columnPosition;
+
+                // Special case: if this is a single-cell row with bgcolor (concurrent class)
+                // and it starts at column 0, find where it should actually be placed
+                if (i === 0 && cellStartColumn === 0 && cell.getAttribute('bgcolor') && cells.length === 1 && currentDay) {
+                    // Look up the column position from the day's start row based on colspan
+                    const dayColspanMap = dayClassCellsByColspan.get(currentDay);
+                    if (dayColspanMap && dayColspanMap.has(colspan)) {
+                        cellStartColumn = dayColspanMap.get(colspan);
+                    } else {
+                        // Fallback: find first occupied column in this row's grid (from previous rows' rowspans)
+                        for (let col = 0; col < MAX_COLS; col++) {
+                            if (grid[rowIdx][col] !== undefined) {
+                                cellStartColumn = col;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // If this is a class cell in the day start row, record its colspan -> column mapping
+                if (rowIdx === currentDayStartRow && currentDay && cell.getAttribute('bgcolor') && cell.querySelector('table')) {
+                    const dayColspanMap = dayClassCellsByColspan.get(currentDay);
+                    if (dayColspanMap && !dayColspanMap.has(colspan)) {
+                        dayColspanMap.set(colspan, cellStartColumn);
+                    }
+                }
+
+                // Mark grid cells as occupied and store cell reference
+                for (let r = 0; r < rowspan; r++) {
+                    if (!grid[rowIdx + r]) grid[rowIdx + r] = [];
+                    for (let c = 0; c < colspan; c++) {
+                        if (cellStartColumn + c < MAX_COLS) {
+                            grid[rowIdx + r][cellStartColumn + c] = {
+                                cell,
+                                rowIdx,
+                                columnPosition: cellStartColumn,
+                                colspan,
+                                rowspan
+                            };
+                        }
+                    }
+                }
+
+                // Extract class info if this is a class cell (has bgcolor and inner table)
+                const bgcolor = cell.getAttribute('bgcolor');
+                const innerTable = cell.querySelector('table');
+
+                if (bgcolor && innerTable && currentDay) {
+                    // Column 0 is day cell, columns 1-2 are slot 1, columns 3-4 are slot 2, etc.
+                    // Formula: slot = floor((column - 1) / 2) + 1 for columns >= 1
+                    const slotNum = cellStartColumn === 0 ? 0 : Math.floor((cellStartColumn - 1) / 2) + 1;
+                    const classInfo = {
+                        slot: slotNum,
+                        subject: '',
+                        teacher: '',
+                        room: '',
+                        note: '',
+                        skupina: null,
+                        duration: colspan / 2,
+                        color: bgcolor,
+                        dayName: currentDay
+                    };
+
+                    const innerRows = Array.from(innerTable.querySelectorAll('tr'));
+
+                    if (innerRows[0]) {
+                        const firstRowCells = Array.from(innerRows[0].querySelectorAll('td'));
+                        firstRowCells.forEach(td => {
+                            const font = td.querySelector('font[size="2"]');
+                            if (font) {
+                                const text = font.textContent.trim();
+                                if (text.includes('Skupina')) {
+                                    classInfo.note = text;
+                                    // Extract skupina number (e.g., "Skupina 1" -> 1)
+                                    const match = text.match(/Skupina\s+(\d+)/i);
+                                    if (match) classInfo.skupina = parseInt(match[1], 10);
+                                } else if (!classInfo.teacher) {
+                                    classInfo.teacher = text;
+                                }
+                            }
+                        });
+                    }
+
+                    if (innerRows[1]) {
+                        const secondRowCells = Array.from(innerRows[1].querySelectorAll('td'));
+                        secondRowCells.forEach(td => {
+                            const boldSubject = td.querySelector('font[size="3"] b');
+                            if (boldSubject) classInfo.subject = boldSubject.textContent.trim();
+
+                            const fonts = Array.from(td.querySelectorAll('font[size="2"]'));
+                            fonts.forEach(font => {
+                                const text = font.textContent.trim();
+                                if (text.match(/^\d+$/)) classInfo.room = text;
+                            });
+                        });
+                    }
+
+                    if (classInfo.subject) {
+                        const dayInfo = dayData.get(currentDay);
+                        if (dayInfo && !dayInfo.note) {
+                            dayInfo.classes.push(classInfo);
+                        }
+                    }
+                }
+
+                // Move columnPosition to after this cell
+                columnPosition = cellStartColumn + colspan;
+            }
+        });
+
+        // Convert dayData map to result array and sort classes by slot
+        dayData.forEach((dayInfo) => {
+            // Sort classes by slot number (chronological order)
+            dayInfo.classes.sort((a, b) => a.slot - b.slot);
+            result.days.push(dayInfo);
         });
 
         return result;
@@ -442,10 +564,204 @@ END:VEVENT
     filterSkupina(subject, value) {
         if (value === 'all') {
             delete this.selectedSkupine[subject];
+            delete this.preferences.selectedSkupine[subject];
         } else {
             this.selectedSkupine[subject] = parseInt(value, 10);
+            this.preferences.selectedSkupine[subject] = parseInt(value, 10);
         }
+        this.savePreferences();
         this.render();
+    }
+
+    // Settings Modal
+    async openSettings() {
+        // Store current preferences as temp in case user cancels
+        this.tempPreferences = {
+            defaultClass: this.selectedClass,
+            selectedSkupine: { ...this.selectedSkupine }
+        };
+
+        // Populate class select
+        const classSelect = document.getElementById('settingsClassSelect');
+        classSelect.innerHTML = this.availableClasses.map(cls =>
+            `<option value="${cls.value}" ${cls.value === this.selectedClass ? 'selected' : ''}>${cls.label}</option>`
+        ).join('');
+
+        // Add change listener to fetch all skupinas across all weeks
+        classSelect.onchange = async (e) => {
+            this.tempPreferences.defaultClass = e.target.value;
+            await this.fetchAllSkupinasForClass(e.target.value);
+            this.renderSettingsSkupine();
+        };
+
+        // Fetch all skupinas for current class
+        await this.fetchAllSkupinasForClass(this.selectedClass);
+        this.renderSettingsSkupine();
+        document.getElementById('settingsModal').style.display = 'flex';
+    }
+
+    renderSettingsSkupine() {
+        const container = document.getElementById('settingsSkupinaContainer');
+        const subjectsMap = this.allSkupinasMap || this.getSkupinasBySubject();
+
+        if (subjectsMap.size === 0) {
+            container.innerHTML = '<p class="help-text">No skupine found for this class.</p>';
+            return;
+        }
+
+        let html = '<div class="settings-skupina-section"><h3>Default Skupine:</h3><div class="skupina-filters-grid">';
+        subjectsMap.forEach((skupinas, subject) => {
+            const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
+            if (skupinaArray.length > 1) {
+                const selectedValue = this.tempPreferences?.selectedSkupine[subject] || this.selectedSkupine[subject] || 'all';
+                html += `
+                    <div class="skupina-filter-item">
+                        <label>${subject}:</label>
+                        <select onchange="app.updateTempSkupina('${subject.replace(/'/g, "\\'")}', this.value)">
+                            <option value="all" ${selectedValue === 'all' ? 'selected' : ''}>All</option>
+                            ${skupinaArray.map(s => `<option value="${s}" ${selectedValue == s ? 'selected' : ''}>Skupina ${s}</option>`).join('')}
+                        </select>
+                    </div>
+                `;
+            }
+        });
+        html += '</div></div>';
+        container.innerHTML = html;
+    }
+
+    updateTempSkupina(subject, value) {
+        if (!this.tempPreferences) this.tempPreferences = { selectedSkupine: {} };
+        if (!this.tempPreferences.selectedSkupine) this.tempPreferences.selectedSkupine = {};
+
+        if (value === 'all') {
+            delete this.tempPreferences.selectedSkupine[subject];
+        } else {
+            this.tempPreferences.selectedSkupine[subject] = parseInt(value, 10);
+        }
+    }
+
+    async fetchTimetableForClass(classValue) {
+        // Temporarily fetch timetable for the selected class to show available skupine
+        try {
+            const url = `/api/timetable/${this.weekNumber}/${classValue}`;
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const html = await response.text();
+            this.timetable = this.parseTimetable(html);
+        } catch (err) {
+            console.error('Error fetching timetable for class:', err);
+        }
+    }
+
+    async fetchAllSkupinasForClass(classValue) {
+        // Fetch all skupinas across all weeks for a class
+        try {
+            const response = await fetch(`/api/skupinas/${classValue}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const skupinasData = await response.json();
+
+            // Convert to the format used by getSkupinasBySubject
+            this.allSkupinasMap = new Map();
+            Object.keys(skupinasData).forEach(subject => {
+                this.allSkupinasMap.set(subject, new Set(skupinasData[subject]));
+            });
+        } catch (err) {
+            console.error('Error fetching all skupinas:', err);
+            this.allSkupinasMap = new Map();
+        }
+    }
+
+    saveSettings() {
+        if (this.tempPreferences) {
+            this.selectedClass = this.tempPreferences.defaultClass;
+            this.selectedSkupine = this.tempPreferences.selectedSkupine || {};
+            this.preferences.defaultClass = this.selectedClass;
+            this.preferences.selectedSkupine = this.selectedSkupine;
+            this.savePreferences();
+        }
+
+        this.closeSettings();
+        this.fetchTimetable();
+    }
+
+    closeSettings() {
+        document.getElementById('settingsModal').style.display = 'none';
+        this.tempPreferences = null;
+    }
+
+    // Onboarding Modal
+    async showOnboarding() {
+        // Populate class select
+        const classSelect = document.getElementById('onboardingClassSelect');
+        classSelect.innerHTML = this.availableClasses.map(cls =>
+            `<option value="${cls.value}">${cls.label}</option>`
+        ).join('');
+
+        // Fetch all skupinas for default class
+        if (this.availableClasses.length > 0) {
+            const defaultClass = this.availableClasses[0].value;
+            await this.fetchAllSkupinasForClass(defaultClass);
+            this.renderOnboardingSkupine();
+        }
+
+        // Add change listener
+        classSelect.onchange = async (e) => {
+            await this.fetchAllSkupinasForClass(e.target.value);
+            this.renderOnboardingSkupine();
+        };
+
+        document.getElementById('onboardingModal').style.display = 'flex';
+    }
+
+    renderOnboardingSkupine() {
+        const container = document.getElementById('onboardingSkupinaContainer');
+        const subjectsMap = this.allSkupinasMap || this.getSkupinasBySubject();
+
+        if (subjectsMap.size === 0) {
+            container.innerHTML = '<p class="help-text">No skupine found for this class.</p>';
+            return;
+        }
+
+        let html = '<div class="settings-skupina-section"><h3>Select your skupine:</h3><p class="help-text">Choose which skupina you belong to for each subject (you can change this later in settings).</p><div class="skupina-filters-grid">';
+        subjectsMap.forEach((skupinas, subject) => {
+            const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
+            if (skupinaArray.length > 1) {
+                html += `
+                    <div class="skupina-filter-item">
+                        <label>${subject}:</label>
+                        <select id="onboarding-${subject.replace(/\s+/g, '-')}" class="onboarding-skupina-select" data-subject="${subject}">
+                            <option value="all">All</option>
+                            ${skupinaArray.map(s => `<option value="${s}">Skupina ${s}</option>`).join('')}
+                        </select>
+                    </div>
+                `;
+            }
+        });
+        html += '</div></div>';
+        container.innerHTML = html;
+    }
+
+    async completeOnboarding() {
+        const classSelect = document.getElementById('onboardingClassSelect');
+        this.selectedClass = classSelect.value;
+        this.preferences.defaultClass = this.selectedClass;
+
+        // Collect all skupina selections
+        const skupinaSelects = document.querySelectorAll('.onboarding-skupina-select');
+        skupinaSelects.forEach(select => {
+            const subject = select.dataset.subject;
+            const value = select.value;
+            if (value !== 'all') {
+                this.selectedSkupine[subject] = parseInt(value, 10);
+                this.preferences.selectedSkupine[subject] = parseInt(value, 10);
+            }
+        });
+
+        this.preferences.onboardingComplete = true;
+        this.savePreferences();
+
+        document.getElementById('onboardingModal').style.display = 'none';
+        await this.fetchTimetable();
     }
 
     shouldShowClass(cls) {

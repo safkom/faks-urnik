@@ -156,6 +156,92 @@ app.get('/api/timetable/:week/:classNum', async (req, res) => {
   }
 });
 
+// Get all available skupinas for a class across all weeks
+app.get('/api/skupinas/:classNum', async (req, res) => {
+  const { classNum } = req.params;
+
+  try {
+    // Get available weeks from cache or fetch them
+    let weeks = [];
+    const now = Date.now();
+    if (optionsCache.data && optionsCache.expiresAt > now) {
+      weeks = optionsCache.data.weeks || [];
+    }
+
+    const subjectsMap = new Map();
+    const paddedNum = classNum.toString().padStart(5, '0');
+
+    // Fetch timetables for all available weeks
+    for (const week of weeks) {
+      const url = `https://sckr.si/vss/urniki/c/${week.value}/c${paddedNum}.htm`;
+
+      try {
+        const cached = timetableCache.get(url);
+        let html;
+
+        if (cached && cached.expiresAt > now) {
+          html = cached.body;
+        } else {
+          const response = await fetch(url);
+          if (response.ok) {
+            html = await response.text();
+            timetableCache.set(url, { body: html, expiresAt: now + TIMETABLE_TTL_MS });
+          }
+        }
+
+        if (html) {
+          // Parse HTML to extract skupinas
+          const skupinaRegex = /Skupina\s+(\d+)/gi;
+          const subjectRegex = /<font[^>]*size="3"[^>]*><b>([^<]+)<\/b><\/font>/gi;
+
+          let match;
+          const foundSubjects = new Set();
+
+          // Find all subjects
+          while ((match = subjectRegex.exec(html)) !== null) {
+            foundSubjects.add(match[1].trim());
+          }
+
+          // Find all skupinas and associate with nearby subjects
+          const lines = html.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const skupinaMatch = lines[i].match(/Skupina\s+(\d+)/i);
+            if (skupinaMatch) {
+              // Look for subject in nearby lines
+              for (let j = Math.max(0, i - 5); j < Math.min(lines.length, i + 10); j++) {
+                const subMatch = lines[j].match(/<font[^>]*size="3"[^>]*><b>([^<]+)<\/b><\/font>/i);
+                if (subMatch) {
+                  const subject = subMatch[1].trim();
+                  const skupinaNum = parseInt(skupinaMatch[1], 10);
+
+                  if (!subjectsMap.has(subject)) {
+                    subjectsMap.set(subject, new Set());
+                  }
+                  subjectsMap.get(subject).add(skupinaNum);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`Error fetching week ${week.value}:`, err.message);
+      }
+    }
+
+    // Convert to plain object
+    const result = {};
+    subjectsMap.forEach((skupinas, subject) => {
+      result[subject] = Array.from(skupinas).sort((a, b) => a - b);
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching skupinas:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Serve static files (HTML, CSS, JS) - must come AFTER API routes
 app.use(express.static(path.join(__dirname, 'public')));
 

@@ -27,6 +27,12 @@
                 </div>
 
                 <div class="button-group">
+                    <button id="settingsBtn" class="btn btn-primary" title="Settings">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M12 1v6m0 6v10M3.93 3.93l4.24 4.24m5.66 5.66l4.24 4.24M1 12h6m6 0h10M3.93 20.07l4.24-4.24m5.66-5.66l4.24-4.24"></path>
+                        </svg>
+                    </button>
                     <button id="todayBtn" class="btn btn-primary" title="Scroll to today">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
@@ -74,6 +80,52 @@
         </div>
 
         <div id="content"></div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="btn-icon" onclick="app.closeSettings()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="settingsClassSelect">Default Class:</label>
+                    <select id="settingsClassSelect" class="form-control"></select>
+                </div>
+                <div id="settingsSkupinaContainer"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="app.saveSettings()">Save</button>
+                <button class="btn btn-secondary" onclick="app.closeSettings()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Onboarding Modal -->
+    <div id="onboardingModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Welcome to ŠC Kranj Urnik!</h2>
+            </div>
+            <div class="modal-body">
+                <p class="onboarding-text">Let's set up your preferences to personalize your timetable.</p>
+                <div class="form-group">
+                    <label for="onboardingClassSelect">Select your class:</label>
+                    <select id="onboardingClassSelect" class="form-control"></select>
+                </div>
+                <div id="onboardingSkupinaContainer"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="app.completeOnboarding()">Get Started</button>
+            </div>
+        </div>
     </div>
 
     <script src="/app.js"></script>
