@@ -97,6 +97,9 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
     white-space: nowrap;
+    -webkit-appearance: none;
+    appearance: none;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .btn-primary {
@@ -106,6 +109,7 @@ body {
 
 .btn-primary:hover:not(:disabled) {
     background: var(--accent-hover);
+    -webkit-transform: translateY(-1px);
     transform: translateY(-1px);
     box-shadow: var(--shadow-md);
 }
@@ -117,6 +121,7 @@ body {
 
 .btn-success:hover {
     background: var(--success-hover);
+    -webkit-transform: translateY(-1px);
     transform: translateY(-1px);
     box-shadow: var(--shadow-md);
 }
@@ -131,6 +136,42 @@ body {
     grid-template-columns: 1fr;
     gap: 0.75rem;
     margin-bottom: 0.75rem;
+}
+
+.skupina-filters-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+}
+
+.skupina-filter-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.skupina-filter-item label {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+}
+
+.skupina-filter-item select {
+    flex: 0 0 auto;
+    min-width: 120px;
+    padding: 0.375rem 0.625rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    font-size: 0.8125rem;
+    background: var(--bg-card);
+    color: var(--text-primary);
 }
 
 .form-group label {
@@ -157,6 +198,8 @@ body {
     outline: none;
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    -webkit-appearance: none;
+    appearance: none;
 }
 
 .error {
@@ -183,12 +226,23 @@ body {
     border: 3px solid var(--border-color);
     border-top-color: var(--accent-primary);
     border-radius: 50%;
+    -webkit-animation: spin 0.8s linear infinite;
     animation: spin 0.8s linear infinite;
     margin: 0 auto 1rem;
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        -webkit-transform: rotate(360deg);
+        transform: rotate(360deg);
+    }
+}
+
+@-webkit-keyframes spin {
+    to {
+        -webkit-transform: rotate(360deg);
+        transform: rotate(360deg);
+    }
 }
 
 .day-card {
@@ -202,6 +256,7 @@ body {
 }
 
 .day-card:hover {
+    -webkit-transform: translateY(-2px);
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
 }
@@ -246,6 +301,7 @@ body {
 .class-item:hover {
     background: var(--bg-card-hover);
     box-shadow: var(--shadow-md);
+    -webkit-transform: translateX(4px);
     transform: translateX(4px);
 }
 
@@ -345,6 +401,10 @@ body {
         gap: 1rem;
     }
 
+    .skupina-filters-grid {
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    }
+
     .day-header {
         padding: 1rem 1.5rem;
         font-size: 1.0625rem;
@@ -425,11 +485,13 @@ body {
 /* Soften hover effects on touch devices */
 @media (hover: none) {
     .class-item:hover {
+        -webkit-transform: none;
         transform: none;
         box-shadow: var(--shadow-sm);
     }
     .btn-primary:hover,
     .btn-success:hover {
+        -webkit-transform: none;
         transform: none;
         box-shadow: var(--shadow-md);
     }

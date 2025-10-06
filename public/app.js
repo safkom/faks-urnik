@@ -7,6 +7,7 @@ class TimetableApp {
         this.weekNumber = '40';
         this.availableWeeks = [];
         this.availableClasses = [];
+        this.selectedSkupine = {}; // Store selected skupina per subject
 
         this.timeSlots = [
             { id: 1, start: '7:15', end: '8:00' },
@@ -131,6 +132,7 @@ class TimetableApp {
 
             const html = await response.text();
             this.timetable = this.parseTimetable(html);
+            this.renderSkupinaFilters();
         } catch (err) {
             this.showError(`Error: ${err.message}`);
         } finally {
@@ -223,6 +225,7 @@ class TimetableApp {
                             teacher: '',
                             room: '',
                             note: '',
+                            skupina: null,
                             duration: colspan / 2,
                             color: bgcolor,
                             dayName: dayName
@@ -238,6 +241,9 @@ class TimetableApp {
                                     const text = font.textContent.trim();
                                     if (text.includes('Skupina')) {
                                         classInfo.note = text;
+                                        // Extract skupina number (e.g., "Skupina 1" -> 1)
+                                        const match = text.match(/Skupina\s+(\d+)/i);
+                                        if (match) classInfo.skupina = parseInt(match[1], 10);
                                     } else if (!classInfo.teacher) {
                                         classInfo.teacher = text;
                                     }
@@ -284,7 +290,12 @@ class TimetableApp {
         return endSlot ? `${startSlot.start}-${endSlot.end}` : `${startSlot.start}-${startSlot.end}`;
     }
 
-    downloadICS(classInfo) {
+    downloadICS(dayIndex, classIndex) {
+        if (!this.timetable || !this.timetable.days[dayIndex]) return;
+        const day = this.timetable.days[dayIndex];
+        if (!day.classes || !day.classes[classIndex]) return;
+        const classInfo = day.classes[classIndex];
+
         const startSlot = this.timeSlots.find(s => s.id === classInfo.slot);
         if (!startSlot) return;
 
@@ -295,7 +306,7 @@ class TimetableApp {
         const dateMatch = classInfo.dayName.match(/(\d+)\.(\d+)\.?/);
         if (!dateMatch) return;
 
-        const day = dateMatch[1].padStart(2, '0');
+        const day_num = dateMatch[1].padStart(2, '0');
         const month = dateMatch[2].padStart(2, '0');
         const year = new Date().getFullYear();
 
@@ -306,10 +317,10 @@ class TimetableApp {
 VERSION:2.0
 PRODID:-//ŠC Kranj//Urnik//EN
 BEGIN:VEVENT
-UID:${classInfo.subject}-${day}${month}${year}-${startTime}@sckranj.si
-DTSTAMP:${year}${month}${day}T${startTime}00
-DTSTART:${year}${month}${day}T${startTime}00
-DTEND:${year}${month}${day}T${endTime}00
+UID:${classInfo.subject}-${day_num}${month}${year}-${startTime}@sckranj.si
+DTSTAMP:${year}${month}${day_num}T${startTime}00
+DTSTART:${year}${month}${day_num}T${startTime}00
+DTEND:${year}${month}${day_num}T${endTime}00
 SUMMARY:${classInfo.subject}${classInfo.note ? ' - ' + classInfo.note : ''}
 DESCRIPTION:Class: ${this.timetable.className}\\nTeacher: ${classInfo.teacher || 'N/A'}\\nRoom: ${classInfo.room || 'N/A'}
 LOCATION:Room ${classInfo.room || 'TBD'}
@@ -379,6 +390,71 @@ END:VEVENT
         document.getElementById('error').style.display = 'none';
     }
 
+    getSkupinasBySubject() {
+        const subjectsMap = new Map();
+        if (!this.timetable) return subjectsMap;
+
+        this.timetable.days.forEach(day => {
+            day.classes.forEach(cls => {
+                if (cls.skupina !== null && cls.subject) {
+                    if (!subjectsMap.has(cls.subject)) {
+                        subjectsMap.set(cls.subject, new Set());
+                    }
+                    subjectsMap.get(cls.subject).add(cls.skupina);
+                }
+            });
+        });
+
+        return subjectsMap;
+    }
+
+    renderSkupinaFilters() {
+        const container = document.getElementById('skupinaFilters');
+        const subjectsMap = this.getSkupinasBySubject();
+
+        if (subjectsMap.size === 0) {
+            container.style.display = 'none';
+            return;
+        }
+
+        let html = '<div class="skupina-filters-grid">';
+        subjectsMap.forEach((skupinas, subject) => {
+            const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
+            if (skupinaArray.length > 1) {
+                const selectedValue = this.selectedSkupine[subject] || 'all';
+                html += `
+                    <div class="skupina-filter-item">
+                        <label>${subject}:</label>
+                        <select onchange="app.filterSkupina('${subject.replace(/'/g, "\\'")}', this.value)">
+                            <option value="all" ${selectedValue === 'all' ? 'selected' : ''}>All</option>
+                            ${skupinaArray.map(s => `<option value="${s}" ${selectedValue == s ? 'selected' : ''}>Skupina ${s}</option>`).join('')}
+                        </select>
+                    </div>
+                `;
+            }
+        });
+        html += '</div>';
+
+        container.innerHTML = html;
+        container.style.display = 'block';
+    }
+
+    filterSkupina(subject, value) {
+        if (value === 'all') {
+            delete this.selectedSkupine[subject];
+        } else {
+            this.selectedSkupine[subject] = parseInt(value, 10);
+        }
+        this.render();
+    }
+
+    shouldShowClass(cls) {
+        if (!cls.subject || cls.skupina === null) return true;
+        const selectedSkupina = this.selectedSkupine[cls.subject];
+        if (selectedSkupina === undefined) return true;
+        return cls.skupina === selectedSkupina;
+    }
+
     render() {
         this.hideError();
 
@@ -404,22 +480,25 @@ END:VEVENT
         }
 
         const todayName = this.getTodayName();
-        const html = this.timetable.days.map(day => {
+        const html = this.timetable.days.map((day, dayIdx) => {
             const isToday = (todayName && (day.day || '').includes(todayName)) || this.isTodayByDate(day.day);
+            const visibleClasses = day.classes.filter(cls => this.shouldShowClass(cls));
             return `
             <div class="day-card${isToday ? ' current' : ''}">
                 <div class="day-header">${day.day}</div>
                 <div class="day-content">
                     ${day.note ? `<div class=\"day-note\">${day.note}</div>` :
-                      day.classes.length === 0 ? `<div class=\"day-empty\">No classes</div>` :
-                      day.classes.map((cls, idx) => `
+                      visibleClasses.length === 0 ? `<div class=\"day-empty\">No classes</div>` :
+                      day.classes.map((cls, clsIdx) => {
+                        if (!this.shouldShowClass(cls)) return '';
+                        return `
                         <div class=\"class-item\" style=\"background-color: ${cls.color || '#EEF2FF'}\">
                             <div class=\"class-header\">
                                 <div style=\"display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;\">
                                     <span class=\"class-badge\">${cls.subject}</span>
                                     ${cls.note ? `<span class=\"class-note\">${cls.note}</span>` : ''}
                                 </div>
-                                <button class=\"btn-icon\" onclick=\"app.downloadICS(${JSON.stringify(cls).replace(/\\"/g, '&quot;')})\" title=\"Export to calendar\">
+                                <button class=\"btn-icon\" onclick=\"app.downloadICS(${dayIdx}, ${clsIdx})\" title=\"Export to calendar\">
                                     <svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
                                         <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"></path>
                                         <polyline points=\"7 10 12 15 17 10\"></polyline>
@@ -453,7 +532,8 @@ END:VEVENT
                                 </div>` : ''}
                             </div>
                         </div>
-                    `).join('')}
+                        `;
+                      }).join('')}
                 </div>
             </div>`;
         }).join('');

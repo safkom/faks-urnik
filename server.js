@@ -60,7 +60,8 @@ app.get('/api/options', async (req, res) => {
     const { weekNo, year } = getIsoWeekInfo(today);
     const candidateWeeks = [];
     const pushWeek = (w) => { if (w >= 1 && w <= 53 && !candidateWeeks.includes(w)) candidateWeeks.push(w); };
-    for (let i = -8; i <= 12; i++) pushWeek(weekNo + i);
+    // Only check a smaller range around current week to match schedule site
+    for (let i = -2; i <= 6; i++) pushWeek(weekNo + i);
 
     const weeks = [];
     for (const w of candidateWeeks) {
@@ -72,31 +73,37 @@ app.get('/api/options', async (req, res) => {
       }
     }
 
-    // Build class list by scanning a representative week (prefer current if available)
-    const classes = [];
-    const scanWeek = weeks.length ? weeks[0].value : String(weekNo);
-    let consecutiveMisses = 0;
-    const MAX_MISSES = 30;
-    for (let i = 1; i <= 300 && consecutiveMisses < MAX_MISSES; i++) {
-      const id = String(i).padStart(5, '0');
-      const url = `https://sckr.si/vss/urniki/c/${scanWeek}/c${id}.htm`;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const resp = await fetch(url);
-        if (!resp.ok) { consecutiveMisses++; continue; }
-        const page = await resp.text();
-        const m = page.match(/<font\s+size=\"7\"[^>]*>([^<]+)<\/font>/i);
-        if (m) {
-          const label = m[1].replace(/\r?\n/g, '').replace(/&nbsp;/g, '').trim();
-          classes.push({ value: String(i), label });
-          consecutiveMisses = 0; // reset on hit
-        } else {
-          consecutiveMisses++;
-        }
-      } catch (_) {
-        consecutiveMisses++;
-      }
-    }
+    // Use a fixed list of known classes from the schedule site
+    const classes = [
+      { value: '1', label: 'RAI 1.l' },
+      { value: '2', label: 'RAI 2.l' },
+      { value: '3', label: 'INF 2.l' },
+      { value: '4', label: 'RAI 1.c' },
+      { value: '5', label: 'RAI 2.c' },
+      { value: '6', label: 'INF 3.c' },
+      { value: '7', label: 'MEH 1.l' },
+      { value: '8', label: 'MEH 2.l' },
+      { value: '9', label: 'MEH 1.c' },
+      { value: '10', label: 'MEH 2.c' },
+      { value: '11', label: 'MEH 3.c' },
+      { value: '12', label: 'ENE 1.l' },
+      { value: '13', label: 'ENE 2.l' },
+      { value: '14', label: 'ENE 1.c' },
+      { value: '15', label: 'ENE 2.c' },
+      { value: '16', label: 'ENE 3.c' },
+      { value: '17', label: 'VAR 1.c' },
+      { value: '18', label: 'VAR 2.c' },
+      { value: '19', label: 'VAR 3.c' },
+      { value: '20', label: 'EKN 1.l' },
+      { value: '21', label: 'EKN 2.l Kom' },
+      { value: '22', label: 'EKN 2.l Rač' },
+      { value: '23', label: 'EKN 1.c Rač' },
+      { value: '24', label: 'EKN 2.c Rač' },
+      { value: '25', label: 'EKN 2.c Kom' },
+      { value: '26', label: 'EKN 3.c Kom' },
+      { value: '27', label: 'OSM 1.c' },
+      { value: '28', label: 'OSM 2.c' }
+    ];
 
     const payload = { weeks, classes };
     if (!noCache && weeks.length && classes.length) {
