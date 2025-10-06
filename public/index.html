@@ -1,55 +1,72 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="ŠC Kranj timetable viewer - View and export your class schedule">
     <title>ŠC Kranj Urnik</title>
-    <link rel="stylesheet" href="/styles.css">
     <link rel="icon" href="/favicon.ico">
+    <script src="/app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-<body>
-    <div class="container">
-        <div class="card">
-            <div class="header">
+
+<body class="bg-[#0f0f23] font-sans">
+    <div class="mx-auto p-4 max-w-5xl">
+        <div class="bg-[#1a1a2e] rounded-lg shadow-md p-4 sm:p-6 text-white">
+            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-4 gap-4">
                 <div>
-                    <h1 class="title">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <h1 class="text-xl sm:text-2xl font-bold flex items-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" class="mr-2">
                             <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
                             <line x1="16" y1="2" x2="16" y2="6"></line>
                             <line x1="8" y1="2" x2="8" y2="6"></line>
                             <line x1="3" y1="10" x2="21" y2="10"></line>
                         </svg>
-                        <span class="mobile-only">Urnik</span>
-                        <span class="desktop-only">ŠC Kranj Urnik</span>
+                        <span class="sm:hidden">Urnik</span>
+                        <span class="hidden sm:inline">ŠC Kranj Urnik</span>
                     </h1>
-                    <p class="subtitle" id="subtitle"></p>
+                    <p class="text-sm mt-1 text-indigo-500 font-bold" id="subtitle"></p>
                 </div>
 
-                <div class="button-group">
-                    <button id="settingsBtn" class="btn btn-primary" title="Settings">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <div class="flex items-center space-x-2 self-end sm:self-auto">
+                    <button id="settingsBtn"
+                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm cursor-pointer"
+                        title="Settings">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"></circle>
-                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                            <path
+                                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+                            </path>
                         </svg>
                     </button>
-                    <button id="todayBtn" class="btn btn-primary" title="Scroll to today">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <button id="todayBtn"
+                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 cursor-pointer"
+                        title="Premakni na danes">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M12 6v6l4 2"></path>
                         </svg>
-                        <span class="desktop-only">Today</span>
+                        <span class="hidden sm:inline ml-2">Danes</span>
                     </button>
-                    <button id="exportAllBtn" class="btn btn-success" style="display: none;">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <button id="exportAllBtn"
+                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 cursor-pointer"
+                        style="display: none;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                             <polyline points="7 10 12 15 17 10"></polyline>
                             <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
-                        <span class="desktop-only">All</span>
+                        <span class="hidden sm:inline ml-2">Vse</span>
                     </button>
-                    <button id="refreshBtn" class="btn btn-primary">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <button id="refreshBtn"
+                        class="inline-flex items-center p-2 text-sm font-medium rounded-md bg-gray-700 hover:bg-gray-600 cursor-pointer">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" class="animate-spin-slow">
                             <polyline points="23 4 23 10 17 10"></polyline>
                             <polyline points="1 20 1 14 7 14"></polyline>
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
@@ -58,114 +75,125 @@
                 </div>
             </div>
 
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="weekSelect">Week:</label>
-                    <select id="weekSelect" class="form-control">
-                        <option value="40">Loading...</option>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                    <label for="weekSelect" class="block text-sm font-medium mb-1">Teden:</label>
+                    <select id="weekSelect"
+                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white">
+                        <option>Nalaganje...</option>
                     </select>
                 </div>
 
-                <div class="form-group">
-                    <label for="classSelect">Class:</label>
-                    <select id="classSelect" class="form-control">
-                        <option value="2">RAI 2.l</option>
+                <div>
+                    <label for="classSelect" class="block text-sm font-medium mb-1">Razred:</label>
+                    <select id="classSelect"
+                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white">
+                        <option>Nalaganje...</option>
                     </select>
                 </div>
             </div>
 
-            <div id="skupinaFiltersSection" style="display: none; margin-top: 0.75rem;">
-                <button id="skupinaToggleBtn" class="btn-link" onclick="app.toggleSkupinaFilters()">
-                    <svg id="skupinaToggleIcon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(0deg); transition: transform 0.2s;">
+            <div id="skupinaFiltersSection" class="mt-4" style="display: none;">
+                <button id="skupinaToggleBtn"
+                    class="flex items-center gap-2 text-sm font-medium text-indigo-400 hover:text-indigo-300 cursor-pointer"
+                    onclick="app.toggleSkupinaFilters()">
+                    <svg id="skupinaToggleIcon" xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        class="transition-transform duration-200">
                         <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
-                    <span id="skupinaToggleText">Show Skupina Filters</span>
+                    <span id="skupinaToggleText">Pokaži Filtre Skupin
+                    </span>
                 </button>
-                <div id="skupinaFilters" style="display: none;"></div>
+                <div id="skupinaFilters" class="mt-3" style="display: none;"></div>
             </div>
 
-            <div id="error" class="error" style="display: none;"></div>
+            <div id="error" class="mt-4 p-4 bg-red-900 border border-red-700 text-red-200 rounded-md"
+                style="display: none;"></div>
         </div>
 
-        <div id="content"></div>
+        <div id="content" class="mt-6"></div>
     </div>
 
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Settings</h2>
-                <button class="btn-icon" onclick="app.closeSettings()">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div id="settingsModal" style="display: none;"
+        class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+        <div class="bg-[#1a1a2e] rounded-lg shadow-xl w-full max-w-lg text-white">
+            <div class="p-4 border-b border-gray-600 flex justify-between items-center">
+                <h2 class="text-lg font-bold">Settings</h2>
+                <button onclick="app.closeSettings()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" class="text-gray-400 hover:text-white">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>
                     </svg>
                 </button>
             </div>
-            <div class="modal-body">
-                <div class="settings-section">
-                    <h3>Default Class</h3>
-                    <div class="form-group">
-                        <label for="settingsClassSelect">Your Class:</label>
-                        <select id="settingsClassSelect" class="form-control"></select>
-                    </div>
+            <div class="p-6 space-y-6">
+                <div class="space-y-2">
+                    <h3 class="font-semibold">Privzeti Razred</h3>
+                    <label for="settingsClassSelect" class="block text-sm text-gray-400">Vaš Razred:</label>
+                    <select id="settingsClassSelect"
+                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white"></select>
                 </div>
 
-                <div class="settings-section">
-                    <h3>Visible Subjects</h3>
-                    <p class="help-text">Choose which subjects to show in your timetable</p>
-                    <div id="settingsSubjectContainer"></div>
+                <div class="space-y-2">
+                    <h3 class="font-semibold">Vidni Predmeti</h3>
+                    <p class="text-sm text-gray-400">Izberite predmete, ki jih želite videti na urniku:</p>
+                    <div id="settingsSubjectContainer" class="mt-2"></div>
                 </div>
 
-                <div class="settings-section">
-                    <h3>Default Skupinas</h3>
-                    <p class="help-text">Select your skupina for each subject</p>
-                    <div id="settingsSkupinaContainer"></div>
+                <div class="space-y-2">
+                    <h3 class="font-semibold">Privzete Skupine</h3>
+                    <p class="text-sm text-gray-400">Izberite skupino za vsak predmet:</p>
+                    <div id="settingsSkupinaContainer" class="mt-2"></div>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button class="btn btn-primary" onclick="app.saveSettings()">Save</button>
-                <button class="btn btn-secondary" onclick="app.closeSettings()">Cancel</button>
+            <div class="p-4 bg-gray-800 rounded-b-lg flex justify-end space-x-3">
+                <button class="px-4 py-2 text-sm font-medium rounded-md bg-gray-600 hover:bg-gray-500"
+                    onclick="app.closeSettings()">Cancel</button>
+                <button class="px-4 py-2 text-sm font-medium rounded-md bg-indigo-600 hover:bg-indigo-700"
+                    onclick="app.saveSettings()">Save</button>
             </div>
         </div>
     </div>
 
-    <!-- Onboarding Modal -->
-    <div id="onboardingModal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 id="onboardingTitle">Welcome to ŠC Kranj Urnik!</h2>
+    <div id="onboardingModal" style="display: none;"
+        class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4">
+        <div class="bg-[#1a1a2e] rounded-lg shadow-xl w-full max-w-lg text-white">
+            <div class="p-4 border-b border-gray-600">
+                <h2 id="onboardingTitle" class="text-lg font-bold">ŠC Kranj Urnik!</h2>
             </div>
-            <div class="modal-body">
-                <!-- Step 1: Select Class -->
-                <div id="onboardingStep1" class="onboarding-step">
-                    <p class="onboarding-text">First, select your class:</p>
-                    <div class="form-group">
-                        <label for="onboardingClassSelect">Your Class:</label>
-                        <select id="onboardingClassSelect" class="form-control"></select>
-                    </div>
+            <div class="p-6">
+                <div id="onboardingStep1">
+                    <p class="mb-4 text-gray-300">PRvo, izberite razred:</p>
+                    <label for="onboardingClassSelect" class="block text-sm text-gray-400">Vaš razred:</label>
+                    <select id="onboardingClassSelect"
+                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white"></select>
                 </div>
 
-                <!-- Step 2: Select Subjects -->
-                <div id="onboardingStep2" class="onboarding-step" style="display: none;">
-                    <p class="onboarding-text">Choose which subjects you want to see in your timetable:</p>
+                <div id="onboardingStep2" style="display: none;">
+                    <p class="mb-4 text-gray-300">Izberite predmete, ki jih želite videti na urniku:</p>
                     <div id="onboardingSubjectContainer"></div>
                 </div>
 
-                <!-- Step 3: Select Skupinas -->
-                <div id="onboardingStep3" class="onboarding-step" style="display: none;">
-                    <p class="onboarding-text">Finally, select your skupina for each subject:</p>
+                <div id="onboardingStep3" style="display: none;">
+                    <p class="mb-4 text-gray-300">Končno, izberite skupino za vsak predmet:</p>
                     <div id="onboardingSkupinaContainer"></div>
                 </div>
             </div>
-            <div class="modal-footer">
-                <button id="onboardingBackBtn" class="btn btn-secondary" onclick="app.onboardingPrevStep()" style="display: none;">Back</button>
-                <button id="onboardingNextBtn" class="btn btn-primary" onclick="app.onboardingNextStep()">Next</button>
-                <button id="onboardingFinishBtn" class="btn btn-primary" onclick="app.completeOnboarding()" style="display: none;">Get Started</button>
+            <div class="p-4 bg-gray-800 rounded-b-lg flex justify-end space-x-3">
+                <button id="onboardingBackBtn"
+                    class="px-4 py-2 text-sm font-medium rounded-md bg-gray-600 hover:bg-gray-500"
+                    onclick="app.onboardingPrevStep()" style="display: none;">Nazaj</button>
+                <button id="onboardingNextBtn"
+                    class="px-4 py-2 text-sm font-medium rounded-md bg-indigo-600 hover:bg-indigo-700"
+                    onclick="app.onboardingNextStep()">Naprej</button>
+                <button id="onboardingFinishBtn"
+                    class="px-4 py-2 text-sm font-medium rounded-md bg-indigo-600 hover:bg-indigo-700"
+                    onclick="app.completeOnboarding()" style="display: none;">Začni</button>
             </div>
         </div>
     </div>
-
-    <script src="/app.js"></script>
 </body>
+
 </html>

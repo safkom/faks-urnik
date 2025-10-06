@@ -13,10 +13,9 @@ Spletna aplikacija za pregledovanje urnikov Šolskega centra Kranj. Aplikacija o
 
 ## Tehnologije
 
-- **Backend**: Node.js, Express, node-fetch
+- **Backend**: Node.js, Express
 - **Frontend**: Vanilla JavaScript (brez frameworkov)
-- **CSS**: Custom dark theme z CSS spremenljivkami
-- **CORS Proxy**: Express strežnik za obhod CORS omejitev
+- **CSS**: Tailwind@4
 
 ## Struktura projekta
 
