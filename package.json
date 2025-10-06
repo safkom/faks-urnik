@@ -1,6 +1,6 @@
 {
   "name": "faks-urnik",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "ŠC Kranj timetable scraper - Web app for viewing school schedules",
   "main": "server.js",
   "scripts": {
@@ -23,6 +23,6 @@
     "school",
     "scraper"
   ],
-  "author": "",
+  "author": "Miha Šafranko & Nejc Živic",
   "license": "MIT"
 }
