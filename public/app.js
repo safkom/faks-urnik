@@ -8,8 +8,11 @@ class TimetableApp {
         this.weekNumber = '40';
         this.availableWeeks = [];
         this.availableClasses = [];
+        this.visibleSubjects = this.preferences.visibleSubjects || {}; // Which subjects to show
         this.selectedSkupine = this.preferences.selectedSkupine || {}; // Store selected skupina per subject
         this.tempPreferences = null; // For storing temporary settings during modal editing
+        this.onboardingCurrentStep = 1;
+        this.onboardingTotalSteps = 3;
 
         this.timeSlots = [
             { id: 1, start: '7:15', end: '8:00' },
@@ -58,6 +61,7 @@ class TimetableApp {
         return {
             onboardingComplete: false,
             defaultClass: null,
+            visibleSubjects: {}, // Map of subject -> boolean (true = visible)
             selectedSkupine: {}
         };
     }
@@ -79,8 +83,12 @@ class TimetableApp {
         if (todayBtn) todayBtn.addEventListener('click', () => this.scrollToToday());
 
         document.getElementById('weekSelect').addEventListener('change', (e) => {
-            this.weekNumber = e.target.value;
-            this.fetchTimetable();
+            const selectedWeek = e.target.value;
+            // Only allow selecting from available weeks
+            if (this.availableWeeks.find(w => w.value === selectedWeek)) {
+                this.weekNumber = selectedWeek;
+                this.fetchTimetable();
+            }
         });
 
         document.getElementById('classSelect').addEventListener('change', (e) => {
@@ -175,6 +183,7 @@ class TimetableApp {
 
             const html = await response.text();
             this.timetable = this.parseTimetable(html);
+            this.timetable.lastUpdated = response.headers.get('X-Schedule-Updated') || null;
             this.renderSkupinaFilters();
         } catch (err) {
             this.showError(`Error: ${err.message}`);
@@ -335,6 +344,7 @@ class TimetableApp {
                         teacher: '',
                         room: '',
                         note: '',
+                        specialNote: '',
                         skupina: null,
                         duration: colspan / 2,
                         color: bgcolor,
@@ -370,7 +380,16 @@ class TimetableApp {
                             const fonts = Array.from(td.querySelectorAll('font[size="2"]'));
                             fonts.forEach(font => {
                                 const text = font.textContent.trim();
-                                if (text.match(/^\d+$/)) classInfo.room = text;
+                                if (text.match(/^\d+$/)) {
+                                    classInfo.room = text;
+                                } else if (text && !text.includes('Skupina')) {
+                                    // This is a special note (e.g., "karierni dan")
+                                    if (!classInfo.specialNote) {
+                                        classInfo.specialNote = text;
+                                    } else {
+                                        classInfo.specialNote += ', ' + text;
+                                    }
+                                }
                             });
                         });
                     }
@@ -459,7 +478,7 @@ END:VCALENDAR`;
     downloadAllICS() {
         if (!this.timetable) return;
 
-        let allEvents = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ŠC Kranj//Urnik//EN\n';
+        let allEvents = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ŠC Kranj//Urnik//EN\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\n';
 
         this.timetable.days.forEach(day => {
             day.classes.forEach(cls => {
@@ -470,23 +489,88 @@ END:VCALENDAR`;
                 const endSlotId = cls.slot + (cls.duration || 1) - 1;
                 const endSlot = this.timeSlots.find(s => s.id === endSlotId) || startSlot;
 
-                const dateMatch = cls.dayName.match(/(\d+)\.(\d+)\.?/);
+                // Parse date from day name - format: "Ponedeljek 6.10." or "Ponedeljek 6.10.2025"
+                const dateMatch = cls.dayName.match(/(\d+)\.(\d+)\.(\d{4})?/);
                 if (!dateMatch) return;
 
-                const d = dateMatch[1].padStart(2, '0');
-                const m = dateMatch[2].padStart(2, '0');
-                const y = new Date().getFullYear();
+                const day = parseInt(dateMatch[1], 10);
+                const month = parseInt(dateMatch[2], 10);
+                // If year is provided in the day name, use it; otherwise infer from the week label
+                let year = dateMatch[3] ? parseInt(dateMatch[3], 10) : null;
+
+                // If no year in day name, try to get it from week label
+                if (!year && this.timetable.weekLabel) {
+                    const weekYearMatch = this.timetable.weekLabel.match(/\.(\d{4})$/);
+                    if (weekYearMatch) {
+                        year = parseInt(weekYearMatch[1], 10);
+                    }
+                }
+
+                // Fallback: use current year, but adjust if month suggests different year
+                if (!year) {
+                    const now = new Date();
+                    year = now.getFullYear();
+                    // If we're in December and the schedule shows January-August, it's next year
+                    if (now.getMonth() === 11 && month <= 8) {
+                        year++;
+                    }
+                    // If we're in January-August and the schedule shows September-December, it's last year
+                    if (now.getMonth() <= 7 && month >= 9) {
+                        year--;
+                    }
+                }
+
+                // Create date object and validate
+                const eventDate = new Date(year, month - 1, day);
+
+                // Validate the date is correct (handles invalid dates like Feb 30)
+                if (eventDate.getDate() !== day || eventDate.getMonth() !== month - 1 || eventDate.getFullYear() !== year) {
+                    console.warn(`Invalid date in ICS export: ${day}.${month}.${year} for class ${cls.subject}`);
+                    return;
+                }
+
+                // Validate day of week matches the day name
+                const dayNameLower = cls.dayName.toLowerCase();
+                const dayOfWeek = eventDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+                const expectedDayOfWeek = dayNameLower.includes('ponedeljek') ? 1 :
+                                         dayNameLower.includes('torek') ? 2 :
+                                         dayNameLower.includes('sreda') || dayNameLower.includes('sredo') ? 3 :
+                                         dayNameLower.includes('četrtek') ? 4 :
+                                         dayNameLower.includes('petek') ? 5 : -1;
+
+                if (expectedDayOfWeek !== -1 && dayOfWeek !== expectedDayOfWeek) {
+                    console.warn(`Day of week mismatch for ${cls.subject}: expected ${expectedDayOfWeek}, got ${dayOfWeek} for date ${day}.${month}.${year}`);
+                    return;
+                }
+
+                // Skip if it's Sunday (0) or Saturday (6) - shouldn't happen in school schedule
+                if (dayOfWeek === 0 || dayOfWeek === 6) {
+                    console.warn(`Skipping weekend class: ${cls.subject} on ${day}.${month}.${year}`);
+                    return;
+                }
+
+                const d = day.toString().padStart(2, '0');
+                const m = month.toString().padStart(2, '0');
+                const y = year.toString();
 
                 const startTime = startSlot.start.replace(':', '');
                 const endTime = endSlot.end.replace(':', '');
+
+                // Build description with special notes
+                let description = `Class: ${this.timetable.className}\\nTeacher: ${cls.teacher || 'N/A'}\\nRoom: ${cls.room || 'N/A'}`;
+                if (cls.specialNote) {
+                    description += `\\nNote: ${cls.specialNote}`;
+                }
+
+                const summary = cls.subject + (cls.note ? ' - ' + cls.note : '') + (cls.specialNote ? ` (${cls.specialNote})` : '');
 
                 allEvents += `BEGIN:VEVENT
 UID:${cls.subject}-${d}${m}${y}-${startTime}@sckranj.si
 DTSTAMP:${y}${m}${d}T${startTime}00
 DTSTART:${y}${m}${d}T${startTime}00
 DTEND:${y}${m}${d}T${endTime}00
-SUMMARY:${cls.subject}${cls.note ? ' - ' + cls.note : ''}
-DESCRIPTION:Class: ${this.timetable.className}\\nTeacher: ${cls.teacher || 'N/A'}\\nRoom: ${cls.room || 'N/A'}
+SUMMARY:${summary}
+DESCRIPTION:${description}
 LOCATION:Room ${cls.room || 'TBD'}
 END:VEVENT
 `;
@@ -531,11 +615,12 @@ END:VEVENT
     }
 
     renderSkupinaFilters() {
+        const section = document.getElementById('skupinaFiltersSection');
         const container = document.getElementById('skupinaFilters');
         const subjectsMap = this.getSkupinasBySubject();
 
         if (subjectsMap.size === 0) {
-            container.style.display = 'none';
+            section.style.display = 'none';
             return;
         }
 
@@ -558,7 +643,29 @@ END:VEVENT
         html += '</div>';
 
         container.innerHTML = html;
-        container.style.display = 'block';
+        section.style.display = 'block';
+        // Keep them collapsed by default
+        if (!this.skupinaFiltersExpanded) {
+            container.style.display = 'none';
+        }
+    }
+
+    toggleSkupinaFilters() {
+        const container = document.getElementById('skupinaFilters');
+        const icon = document.getElementById('skupinaToggleIcon');
+        const text = document.getElementById('skupinaToggleText');
+
+        this.skupinaFiltersExpanded = !this.skupinaFiltersExpanded;
+
+        if (this.skupinaFiltersExpanded) {
+            container.style.display = 'block';
+            icon.style.transform = 'rotate(180deg)';
+            text.textContent = 'Hide Skupina Filters';
+        } else {
+            container.style.display = 'none';
+            icon.style.transform = 'rotate(0deg)';
+            text.textContent = 'Show Skupina Filters';
+        }
     }
 
     filterSkupina(subject, value) {
@@ -578,6 +685,7 @@ END:VEVENT
         // Store current preferences as temp in case user cancels
         this.tempPreferences = {
             defaultClass: this.selectedClass,
+            visibleSubjects: { ...this.visibleSubjects },
             selectedSkupine: { ...this.selectedSkupine }
         };
 
@@ -591,13 +699,51 @@ END:VEVENT
         classSelect.onchange = async (e) => {
             this.tempPreferences.defaultClass = e.target.value;
             await this.fetchAllSkupinasForClass(e.target.value);
+            this.renderSettingsSubjects();
             this.renderSettingsSkupine();
         };
 
         // Fetch all skupinas for current class
         await this.fetchAllSkupinasForClass(this.selectedClass);
+        this.renderSettingsSubjects();
         this.renderSettingsSkupine();
         document.getElementById('settingsModal').style.display = 'flex';
+    }
+
+    renderSettingsSubjects() {
+        const container = document.getElementById('settingsSubjectContainer');
+        const subjectsMap = this.allSkupinasMap || this.getSkupinasBySubject();
+
+        if (!subjectsMap || subjectsMap.size === 0) {
+            container.innerHTML = '<p class="help-text">No subjects found for this class.</p>';
+            return;
+        }
+
+        const subjects = Array.from(subjectsMap.keys()).sort();
+
+        let html = '<div class="skupina-filters-grid">';
+        subjects.forEach(subject => {
+            const isVisible = this.tempPreferences?.visibleSubjects?.[subject] !== false;
+            html += `
+                <label class="checkbox-label">
+                    <input type="checkbox" class="settings-subject-checkbox" data-subject="${subject}" ${isVisible ? 'checked' : ''}>
+                    <span>${subject}</span>
+                </label>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+
+        // Add change listeners
+        container.querySelectorAll('.settings-subject-checkbox').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                const subject = e.target.dataset.subject;
+                if (!this.tempPreferences.visibleSubjects) {
+                    this.tempPreferences.visibleSubjects = {};
+                }
+                this.tempPreferences.visibleSubjects[subject] = e.target.checked;
+            });
+        });
     }
 
     renderSettingsSkupine() {
@@ -674,8 +820,10 @@ END:VEVENT
     saveSettings() {
         if (this.tempPreferences) {
             this.selectedClass = this.tempPreferences.defaultClass;
+            this.visibleSubjects = this.tempPreferences.visibleSubjects || {};
             this.selectedSkupine = this.tempPreferences.selectedSkupine || {};
             this.preferences.defaultClass = this.selectedClass;
+            this.preferences.visibleSubjects = this.visibleSubjects;
             this.preferences.selectedSkupine = this.selectedSkupine;
             this.savePreferences();
         }
@@ -691,45 +839,123 @@ END:VEVENT
 
     // Onboarding Modal
     async showOnboarding() {
+        this.onboardingCurrentStep = 1;
+
         // Populate class select
         const classSelect = document.getElementById('onboardingClassSelect');
         classSelect.innerHTML = this.availableClasses.map(cls =>
             `<option value="${cls.value}">${cls.label}</option>`
         ).join('');
 
-        // Fetch all skupinas for default class
-        if (this.availableClasses.length > 0) {
-            const defaultClass = this.availableClasses[0].value;
-            await this.fetchAllSkupinasForClass(defaultClass);
-            this.renderOnboardingSkupine();
-        }
-
-        // Add change listener
-        classSelect.onchange = async (e) => {
-            await this.fetchAllSkupinasForClass(e.target.value);
-            this.renderOnboardingSkupine();
-        };
-
+        // Show modal
         document.getElementById('onboardingModal').style.display = 'flex';
+        this.updateOnboardingStep();
     }
 
-    renderOnboardingSkupine() {
-        const container = document.getElementById('onboardingSkupinaContainer');
-        const subjectsMap = this.allSkupinasMap || this.getSkupinasBySubject();
+    onboardingNextStep() {
+        if (this.onboardingCurrentStep === 1) {
+            // Load subjects for selected class
+            const classSelect = document.getElementById('onboardingClassSelect');
+            this.tempPreferences = { defaultClass: classSelect.value, visibleSubjects: {}, selectedSkupine: {} };
+            this.loadOnboardingSubjects();
+        } else if (this.onboardingCurrentStep === 2) {
+            // Load skupinas for visible subjects
+            this.loadOnboardingSkupinas();
+        }
 
-        if (subjectsMap.size === 0) {
-            container.innerHTML = '<p class="help-text">No skupine found for this class.</p>';
+        if (this.onboardingCurrentStep < this.onboardingTotalSteps) {
+            this.onboardingCurrentStep++;
+            this.updateOnboardingStep();
+        }
+    }
+
+    onboardingPrevStep() {
+        if (this.onboardingCurrentStep > 1) {
+            this.onboardingCurrentStep--;
+            this.updateOnboardingStep();
+        }
+    }
+
+    updateOnboardingStep() {
+        // Hide all steps
+        for (let i = 1; i <= this.onboardingTotalSteps; i++) {
+            document.getElementById(`onboardingStep${i}`).style.display = 'none';
+        }
+
+        // Show current step
+        document.getElementById(`onboardingStep${this.onboardingCurrentStep}`).style.display = 'block';
+
+        // Update title
+        const titles = [
+            'Welcome to ŠC Kranj Urnik!',
+            'Select Your Subjects',
+            'Select Your Skupinas'
+        ];
+        document.getElementById('onboardingTitle').textContent = titles[this.onboardingCurrentStep - 1];
+
+        // Update buttons
+        document.getElementById('onboardingBackBtn').style.display = this.onboardingCurrentStep > 1 ? 'inline-block' : 'none';
+        document.getElementById('onboardingNextBtn').style.display = this.onboardingCurrentStep < this.onboardingTotalSteps ? 'inline-block' : 'none';
+        document.getElementById('onboardingFinishBtn').style.display = this.onboardingCurrentStep === this.onboardingTotalSteps ? 'inline-block' : 'none';
+    }
+
+    async loadOnboardingSubjects() {
+        const classValue = this.tempPreferences.defaultClass;
+        await this.fetchAllSkupinasForClass(classValue);
+
+        // Get all unique subjects
+        const subjects = Array.from(this.allSkupinasMap.keys()).sort();
+
+        const container = document.getElementById('onboardingSubjectContainer');
+        if (subjects.length === 0) {
+            container.innerHTML = '<p class="help-text">No subjects found for this class.</p>';
             return;
         }
 
-        let html = '<div class="settings-skupina-section"><h3>Select your skupine:</h3><p class="help-text">Choose which skupina you belong to for each subject (you can change this later in settings).</p><div class="skupina-filters-grid">';
+        let html = '<div class="skupina-filters-grid">';
+        subjects.forEach(subject => {
+            html += `
+                <label class="checkbox-label">
+                    <input type="checkbox" class="onboarding-subject-checkbox" data-subject="${subject}" checked>
+                    <span>${subject}</span>
+                </label>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    async loadOnboardingSkupinas() {
+        // Collect selected subjects
+        const checkboxes = document.querySelectorAll('.onboarding-subject-checkbox');
+        checkboxes.forEach(cb => {
+            const subject = cb.dataset.subject;
+            this.tempPreferences.visibleSubjects[subject] = cb.checked;
+        });
+
+        // Show only skupinas for visible subjects
+        const container = document.getElementById('onboardingSkupinaContainer');
+        const subjectsMap = this.allSkupinasMap;
+
+        if (!subjectsMap || subjectsMap.size === 0) {
+            container.innerHTML = '<p class="help-text">No subjects with skupinas found.</p>';
+            return;
+        }
+
+        let html = '<div class="skupina-filters-grid">';
+        let hasSkupinas = false;
+
         subjectsMap.forEach((skupinas, subject) => {
+            // Only show if subject is visible
+            if (!this.tempPreferences.visibleSubjects[subject]) return;
+
             const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
             if (skupinaArray.length > 1) {
+                hasSkupinas = true;
                 html += `
                     <div class="skupina-filter-item">
                         <label>${subject}:</label>
-                        <select id="onboarding-${subject.replace(/\s+/g, '-')}" class="onboarding-skupina-select" data-subject="${subject}">
+                        <select class="onboarding-skupina-select" data-subject="${subject}">
                             <option value="all">All</option>
                             ${skupinaArray.map(s => `<option value="${s}">Skupina ${s}</option>`).join('')}
                         </select>
@@ -737,16 +963,25 @@ END:VEVENT
                 `;
             }
         });
-        html += '</div></div>';
-        container.innerHTML = html;
+        html += '</div>';
+
+        if (!hasSkupinas) {
+            container.innerHTML = '<p class="help-text">No subjects with multiple skupinas. Click "Get Started" to continue!</p>';
+        } else {
+            container.innerHTML = html;
+        }
     }
 
     async completeOnboarding() {
-        const classSelect = document.getElementById('onboardingClassSelect');
-        this.selectedClass = classSelect.value;
+        // Save class
+        this.selectedClass = this.tempPreferences.defaultClass;
         this.preferences.defaultClass = this.selectedClass;
 
-        // Collect all skupina selections
+        // Save visible subjects
+        this.visibleSubjects = this.tempPreferences.visibleSubjects;
+        this.preferences.visibleSubjects = this.visibleSubjects;
+
+        // Save skupinas
         const skupinaSelects = document.querySelectorAll('.onboarding-skupina-select');
         skupinaSelects.forEach(select => {
             const subject = select.dataset.subject;
@@ -761,11 +996,18 @@ END:VEVENT
         this.savePreferences();
 
         document.getElementById('onboardingModal').style.display = 'none';
+        this.tempPreferences = null;
         await this.fetchTimetable();
     }
 
     shouldShowClass(cls) {
-        if (!cls.subject || cls.skupina === null) return true;
+        if (!cls.subject) return true;
+
+        // Check if subject is explicitly hidden
+        if (this.visibleSubjects[cls.subject] === false) return false;
+
+        // Check skupina filter
+        if (cls.skupina === null) return true;
         const selectedSkupina = this.selectedSkupine[cls.subject];
         if (selectedSkupina === undefined) return true;
         return cls.skupina === selectedSkupina;
@@ -775,8 +1017,14 @@ END:VEVENT
         this.hideError();
 
         if (this.timetable?.className) {
-            const label = this.timetable.weekLabel ? ` — ${this.timetable.weekLabel}` : '';
-            document.getElementById('subtitle').textContent = `${this.timetable.className}${label}`;
+            let subtitleHTML = this.timetable.className;
+            if (this.timetable.weekLabel) {
+                subtitleHTML += ` — ${this.timetable.weekLabel}`;
+            }
+            if (this.timetable.lastUpdated) {
+                subtitleHTML += `<br><small style="opacity: 0.7;">Updated: ${this.timetable.lastUpdated}</small>`;
+            }
+            document.getElementById('subtitle').innerHTML = subtitleHTML;
             document.getElementById('exportAllBtn').style.display = 'flex';
         }
 
@@ -813,6 +1061,7 @@ END:VEVENT
                                 <div style=\"display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;\">
                                     <span class=\"class-badge\">${cls.subject}</span>
                                     ${cls.note ? `<span class=\"class-note\">${cls.note}</span>` : ''}
+                                    ${cls.specialNote ? `<span class=\"class-note\" style=\"background: #FFA500; color: white;\">${cls.specialNote}</span>` : ''}
                                 </div>
                                 <button class=\"btn-icon\" onclick=\"app.downloadICS(${dayIdx}, ${clsIdx})\" title=\"Export to calendar\">
                                     <svg class=\"icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">

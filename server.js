@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const path = require('path');
+const { JSDOM } = require('jsdom');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -60,8 +61,8 @@ app.get('/api/options', async (req, res) => {
     const { weekNo, year } = getIsoWeekInfo(today);
     const candidateWeeks = [];
     const pushWeek = (w) => { if (w >= 1 && w <= 53 && !candidateWeeks.includes(w)) candidateWeeks.push(w); };
-    // Only check a smaller range around current week to match schedule site
-    for (let i = -2; i <= 6; i++) pushWeek(weekNo + i);
+    // Only check current week and next 8 weeks (9 weeks total) to match schedule site behavior
+    for (let i = 0; i <= 8; i++) pushWeek(weekNo + i);
 
     const weeks = [];
     for (const w of candidateWeeks) {
@@ -135,6 +136,9 @@ app.get('/api/timetable/:week/:classNum', async (req, res) => {
     const now = Date.now();
     if (cached && cached.expiresAt > now) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      if (cached.timestamp) {
+        res.setHeader('X-Schedule-Updated', cached.timestamp);
+      }
       return res.send(cached.body);
     }
 
@@ -147,8 +151,30 @@ app.get('/api/timetable/:week/:classNum', async (req, res) => {
     }
 
     const html = await response.text();
-    timetableCache.set(url, { body: html, expiresAt: now + TIMETABLE_TTL_MS });
+
+    // Use HTTP Last-Modified header as timestamp if available
+    const lastModified = response.headers.get('last-modified');
+    let updateTimestamp = null;
+    if (lastModified) {
+      try {
+        const date = new Date(lastModified);
+        // Format as DD.MM.YYYY HH:MM
+        const day = date.getDate().toString().padStart(2, '0');
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const year = date.getFullYear();
+        const hours = date.getHours().toString().padStart(2, '0');
+        const minutes = date.getMinutes().toString().padStart(2, '0');
+        updateTimestamp = `${day}.${month}.${year} ${hours}:${minutes}`;
+      } catch (e) {
+        console.error('Error parsing Last-Modified header:', e);
+      }
+    }
+
+    timetableCache.set(url, { body: html, timestamp: updateTimestamp, expiresAt: now + TIMETABLE_TTL_MS });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (updateTimestamp) {
+      res.setHeader('X-Schedule-Updated', updateTimestamp);
+    }
     res.send(html);
   } catch (error) {
     console.error('Error fetching timetable:', error);

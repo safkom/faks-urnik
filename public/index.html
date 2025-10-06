@@ -30,7 +30,7 @@
                     <button id="settingsBtn" class="btn btn-primary" title="Settings">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="3"></circle>
-                            <path d="M12 1v6m0 6v10M3.93 3.93l4.24 4.24m5.66 5.66l4.24 4.24M1 12h6m6 0h10M3.93 20.07l4.24-4.24m5.66-5.66l4.24-4.24"></path>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                         </svg>
                     </button>
                     <button id="todayBtn" class="btn btn-primary" title="Scroll to today">
@@ -74,7 +74,15 @@
                 </div>
             </div>
 
-            <div id="skupinaFilters" style="display: none; margin-top: 0.75rem;"></div>
+            <div id="skupinaFiltersSection" style="display: none; margin-top: 0.75rem;">
+                <button id="skupinaToggleBtn" class="btn-link" onclick="app.toggleSkupinaFilters()">
+                    <svg id="skupinaToggleIcon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform: rotate(0deg); transition: transform 0.2s;">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                    <span id="skupinaToggleText">Show Skupina Filters</span>
+                </button>
+                <div id="skupinaFilters" style="display: none;"></div>
+            </div>
 
             <div id="error" class="error" style="display: none;"></div>
         </div>
@@ -95,11 +103,25 @@
                 </button>
             </div>
             <div class="modal-body">
-                <div class="form-group">
-                    <label for="settingsClassSelect">Default Class:</label>
-                    <select id="settingsClassSelect" class="form-control"></select>
+                <div class="settings-section">
+                    <h3>Default Class</h3>
+                    <div class="form-group">
+                        <label for="settingsClassSelect">Your Class:</label>
+                        <select id="settingsClassSelect" class="form-control"></select>
+                    </div>
                 </div>
-                <div id="settingsSkupinaContainer"></div>
+
+                <div class="settings-section">
+                    <h3>Visible Subjects</h3>
+                    <p class="help-text">Choose which subjects to show in your timetable</p>
+                    <div id="settingsSubjectContainer"></div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Default Skupinas</h3>
+                    <p class="help-text">Select your skupina for each subject</p>
+                    <div id="settingsSkupinaContainer"></div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="app.saveSettings()">Save</button>
@@ -112,18 +134,34 @@
     <div id="onboardingModal" class="modal" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Welcome to ŠC Kranj Urnik!</h2>
+                <h2 id="onboardingTitle">Welcome to ŠC Kranj Urnik!</h2>
             </div>
             <div class="modal-body">
-                <p class="onboarding-text">Let's set up your preferences to personalize your timetable.</p>
-                <div class="form-group">
-                    <label for="onboardingClassSelect">Select your class:</label>
-                    <select id="onboardingClassSelect" class="form-control"></select>
+                <!-- Step 1: Select Class -->
+                <div id="onboardingStep1" class="onboarding-step">
+                    <p class="onboarding-text">First, select your class:</p>
+                    <div class="form-group">
+                        <label for="onboardingClassSelect">Your Class:</label>
+                        <select id="onboardingClassSelect" class="form-control"></select>
+                    </div>
                 </div>
-                <div id="onboardingSkupinaContainer"></div>
+
+                <!-- Step 2: Select Subjects -->
+                <div id="onboardingStep2" class="onboarding-step" style="display: none;">
+                    <p class="onboarding-text">Choose which subjects you want to see in your timetable:</p>
+                    <div id="onboardingSubjectContainer"></div>
+                </div>
+
+                <!-- Step 3: Select Skupinas -->
+                <div id="onboardingStep3" class="onboarding-step" style="display: none;">
+                    <p class="onboarding-text">Finally, select your skupina for each subject:</p>
+                    <div id="onboardingSkupinaContainer"></div>
+                </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-primary" onclick="app.completeOnboarding()">Get Started</button>
+                <button id="onboardingBackBtn" class="btn btn-secondary" onclick="app.onboardingPrevStep()" style="display: none;">Back</button>
+                <button id="onboardingNextBtn" class="btn btn-primary" onclick="app.onboardingNextStep()">Next</button>
+                <button id="onboardingFinishBtn" class="btn btn-primary" onclick="app.completeOnboarding()" style="display: none;">Get Started</button>
             </div>
         </div>
     </div>
