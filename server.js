@@ -6,11 +6,22 @@ const PORT = process.env.PORT || 3001;
 
 // Security headers middleware
 app.use((req, res, next) => {
-  // Content Security Policy
-  res.setHeader(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data:; connect-src 'self';"
-  );
+  // Build a strict but functional CSP. Allow jsdelivr for Tailwind runtime + map fetching, and Cloudflare Insights (site routed via Cloudflare).
+  const scriptSrc = ["'self'", 'https://cdn.jsdelivr.net', 'https://static.cloudflareinsights.com', "'unsafe-inline'"];
+  const styleSrc = ["'self'", 'https://cdn.jsdelivr.net', "'unsafe-inline'"];
+  const connectSrc = ["'self'", 'https://cdn.jsdelivr.net', 'https://static.cloudflareinsights.com'];
+  const imgSrc = ["'self'", 'data:'];
+  const csp = [
+    `default-src 'self'`,
+    `script-src ${scriptSrc.join(' ')}`,
+    `style-src ${styleSrc.join(' ')}`,
+    `img-src ${imgSrc.join(' ')}`,
+    `connect-src ${connectSrc.join(' ')}`,
+    `object-src 'none'`,
+    `base-uri 'none'`,
+    `frame-ancestors 'none'`
+  ].join('; ');
+  res.setHeader('Content-Security-Policy', csp);
   // Prevent clickjacking
   res.setHeader('X-Frame-Options', 'DENY');
   // Prevent MIME type sniffing

@@ -46,6 +46,7 @@ class TimetableApp {
         this.preferences = this.loadPreferences();
         this.selectedClass = this.preferences.defaultClass || '2';
         this.weekNumber = '40';
+        this.pendingScrollToToday = false; // flag to scroll after fetch if needed
         this.availableWeeks = [];
         this.availableClasses = [];
         this.visibleSubjects = this.preferences.visibleSubjects || {};
@@ -321,6 +322,11 @@ class TimetableApp {
         } finally {
             this.loading = false;
             this.render();
+            if (this.pendingScrollToToday) {
+                // Defer scrolling slightly to ensure DOM is painted
+                setTimeout(() => { this.scrollToToday(); }, 50);
+                this.pendingScrollToToday = false;
+            }
             [
                 document.getElementById('refreshBtn'),
                 document.getElementById('exportMenuBtn'),
@@ -869,7 +875,18 @@ class TimetableApp {
 
     getBaseSubjectName(subject) {
         if (!subject) return subject;
-        return subject.endsWith(' lv') ? subject.slice(0, -3).trim() : subject.trim();
+        // Normalize spacing and case
+        let s = subject.trim();
+        // Known variant suffix tokens that should collapse into base name
+        const variantSuffixes = ['lv', 'sv']; // lahko dodamo še: 'vaje', 'vaj'
+        for (const suf of variantSuffixes) {
+            const re = new RegExp(`\\s+${suf}$`, 'i');
+            if (re.test(s)) {
+                s = s.replace(re, '').trim();
+                break; // only strip one recognized suffix
+            }
+        }
+        return s;
     }
 
     getSubjectDisplayName(subject) {
@@ -879,7 +896,10 @@ class TimetableApp {
 
     getSubjectVariants(subject) {
         const baseName = this.getBaseSubjectName(subject);
-        return [baseName, `${baseName} lv`];
+        // Enumerate possible variant forms that might appear in raw HTML
+        const variants = new Set([baseName]);
+        ['lv', 'sv'].forEach(suf => variants.add(`${baseName} ${suf}`));
+        return Array.from(variants);
     }
 
     hasSkupinasForSubject(subject) {
@@ -965,6 +985,10 @@ class TimetableApp {
     renderSkupinaFilters() {
         const section = document.getElementById('skupinaFiltersSection');
         const container = document.getElementById('skupinaFilters');
+        // Safety guard: if the elements are not present (e.g. during early render or DOM changed), skip.
+        if (!section || !container) {
+            return;
+        }
         const meta = this.currentClassMeta || this.classMetaCache.get(this.selectedClass);
         const baseSubjects = meta?.baseSubjects;
 
@@ -1013,6 +1037,8 @@ class TimetableApp {
         const container = document.getElementById('skupinaFilters');
         const icon = document.getElementById('skupinaToggleIcon');
         const text = document.getElementById('skupinaToggleText');
+
+        if (!container || !icon || !text) return; // defensive guard
 
         this.skupinaFiltersExpanded = !this.skupinaFiltersExpanded;
 
@@ -1123,7 +1149,7 @@ class TimetableApp {
             return;
         }
 
-        let html = '<div class="settings-skupina-section"><h3>Default Skupine:</h3><div class="skupina-filters-grid">';
+        let html = '<div class="settings-skupina-section"><div class="skupina-filters-grid">';
         subjectsMap.forEach((info, baseSubject) => {
             const skupinaArray = info.skupinas || [];
             if (skupinaArray.length > 1) {
@@ -1218,6 +1244,9 @@ class TimetableApp {
             info.variants = Array.from(info.variants).sort();
         });
 
+        // Augment with subjects that have no skupinas (appear in timetable but not detected via skupina scraping)
+        await this.augmentMetadataWithTimetableSubjects(baseSubjects, classValue);
+
         const meta = {
             subjectsMap,
             baseSubjects
@@ -1236,6 +1265,33 @@ class TimetableApp {
         }
 
         return meta;
+    }
+
+    async augmentMetadataWithTimetableSubjects(baseSubjects, classValue) {
+        try {
+            // Fetch one timetable (current week) to discover subjects lacking skupinas
+            const res = await fetch(`/api/timetable/${this.weekNumber}/${classValue}`);
+            if (!res.ok) return;
+            const html = await res.text();
+            const parsed = this.parseTimetable(html);
+            const found = new Set();
+            parsed.days.forEach(day => day.classes.forEach(cls => { if (cls.subject) found.add(cls.subject.trim()); }));
+            found.forEach(subject => {
+                const baseName = this.getBaseSubjectName(subject);
+                if (!baseSubjects.has(baseName)) {
+                    baseSubjects.set(baseName, { variants: [subject], skupinas: [] });
+                } else {
+                    const info = baseSubjects.get(baseName);
+                    if (!info.variants.includes(subject)) info.variants.push(subject);
+                }
+            });
+            // Sort variants arrays after augmentation
+            baseSubjects.forEach(info => {
+                if (Array.isArray(info.variants)) info.variants.sort();
+            });
+        } catch (e) {
+            console.warn('Failed to augment subjects without skupinas:', e);
+        }
     }
 
     saveSettings() {
@@ -1594,6 +1650,18 @@ class TimetableApp {
     }
 
     scrollToToday() {
+        // Find the current calendar week from availableWeeks
+        const currentWeek = this.availableWeeks.find(w => w.isCurrent);
+        if (currentWeek && this.weekNumber !== currentWeek.value) {
+            // Switch week then fetch, then scroll after render
+            this.weekNumber = currentWeek.value;
+            const weekSelect = document.getElementById('weekSelect');
+            if (weekSelect) weekSelect.value = currentWeek.value;
+            this.pendingScrollToToday = true;
+            this.fetchTimetable();
+            return;
+        }
+
         const todayName = this.getTodayName();
         const cards = Array.from(document.querySelectorAll('.day-card'));
         let target = null;
