@@ -4,6 +4,24 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Security headers middleware
+app.use((req, res, next) => {
+  // Content Security Policy
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data:; connect-src 'self';"
+  );
+  // Prevent clickjacking
+  res.setHeader('X-Frame-Options', 'DENY');
+  // Prevent MIME type sniffing
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // XSS Protection
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  // Referrer Policy
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 const optionsCache = { data: null, expiresAt: 0 };
 const OPTIONS_TTL_MS = 6 * 60 * 60 * 1000;
 const timetableCache = new Map();
@@ -34,33 +52,29 @@ app.get('/api/options', async (req, res) => {
       return res.json(optionsCache.data);
     }
 
-    const anchors = ['00001', '00002', '00003'];
-    const existsForWeek = async (week) => {
-      const checkPromises = anchors.map(anchor => {
-        const testUrl = `https://sckr.si/vss/urniki/c/${week}/c${anchor}.htm`;
-        return fetch(testUrl, { method: 'HEAD' }).then(r => r.ok).catch(() => false);
-      });
-      const results = await Promise.all(checkPromises);
-      return results.some(ok => ok);
-    };
+    // Scrape available weeks from the navbar frame
+    let weeks = [];
+    try {
+      const navbarUrl = 'https://sckr.si/vss/urniki/frames/navbar.htm';
+      const response = await fetch(navbarUrl);
 
-    const today = new Date();
-    const { weekNo, year } = getIsoWeekInfo(today);
-    const candidateWeeks = [];
-    const pushWeek = (w) => { if (w >= 1 && w <= 53 && !candidateWeeks.includes(w)) candidateWeeks.push(w); };
-    for (let i = 0; i <= 8; i++) pushWeek(weekNo + i);
+      if (response.ok) {
+        const html = await response.text();
+        // Extract weeks from select dropdown: <option value="40">29.9.2025</option>
+        const optionRegex = /<option value="(\d+)">(\d+\.\d+\.\d{4})<\/option>/g;
+        let match;
 
-    const weekCheckPromises = candidateWeeks.map(async (w) => {
-      const ok = await existsForWeek(w);
-      if (ok) {
-        const monday = mondayOfIsoWeek(w, year);
-        return { value: String(w), label: formatDMY(monday) };
+        while ((match = optionRegex.exec(html)) !== null) {
+          const weekValue = match[1];
+          const dateLabel = match[2];
+          weeks.push({ value: weekValue, label: dateLabel });
+        }
+
+        weeks.sort((a, b) => parseInt(a.value, 10) - parseInt(b.value, 10));
       }
-      return null;
-    });
-
-    const results = await Promise.all(weekCheckPromises);
-    const weeks = results.filter(Boolean).sort((a, b) => parseInt(a.value, 10) - parseInt(b.value, 10));
+    } catch (error) {
+      console.error('Error scraping weeks from navbar:', error);
+    }
 
     const classes = [
     { value: '1', label: 'RAI 1.l' },
@@ -110,6 +124,18 @@ app.get('/api/options', async (req, res) => {
 
 app.get('/api/timetable/:week/:classNum', async (req, res) => {
   const { week, classNum } = req.params;
+
+  // Validate inputs
+  const weekNum = parseInt(week, 10);
+  const classNumber = parseInt(classNum, 10);
+
+  if (!weekNum || weekNum < 1 || weekNum > 53) {
+    return res.status(400).json({ error: 'Invalid week number. Must be between 1 and 53.' });
+  }
+
+  if (!classNumber || classNumber < 1 || classNumber > 100) {
+    return res.status(400).json({ error: 'Invalid class number. Must be between 1 and 100.' });
+  }
 
   const paddedNum = classNum.toString().padStart(5, '0');
   const url = `https://sckr.si/vss/urniki/c/${week}/c${paddedNum}.htm`;
@@ -166,15 +192,36 @@ app.get('/api/timetable/:week/:classNum', async (req, res) => {
 app.get('/api/skupinas/:classNum', async (req, res) => {
   const { classNum } = req.params;
 
+  // Validate input
+  const classNumber = parseInt(classNum, 10);
+  if (!classNumber || classNumber < 1 || classNumber > 100) {
+    return res.status(400).json({ error: 'Invalid class number. Must be between 1 and 100.' });
+  }
+
   try {
     let weeks = [];
     const now = Date.now();
+
+    // Get weeks from cache or fetch them if not available
     if (optionsCache.data && optionsCache.expiresAt > now) {
       weeks = optionsCache.data.weeks || [];
+    } else {
+      // Fetch weeks if cache is stale
+      try {
+        const optionsResponse = await fetch(`http://localhost:${PORT}/api/options`);
+        if (optionsResponse.ok) {
+          const optionsData = await optionsResponse.json();
+          weeks = optionsData.weeks || [];
+        }
+      } catch (e) {
+        console.error('Error fetching options for skupinas:', e);
+      }
     }
 
     const subjectsMap = new Map();
     const paddedNum = classNum.toString().padStart(5, '0');
+
+    console.log(`Scanning ${weeks.length} weeks for class ${classNum}...`);
 
     for (const week of weeks) {
       const url = `https://sckr.si/vss/urniki/c/${week.value}/c${paddedNum}.htm`;
@@ -194,31 +241,25 @@ app.get('/api/skupinas/:classNum', async (req, res) => {
         }
 
         if (html) {
-          const skupinaRegex = /Skupina\s+(\d+)/gi;
-          const subjectRegex = /<font[^>]*size="3"[^>]*><b>([^<]+)<\/b><\/font>/gi;
-
-          let match;
-          const foundSubjects = new Set();
-
-          while ((match = subjectRegex.exec(html)) !== null) {
-            foundSubjects.add(match[1].trim());
-          }
-
           const lines = html.split('\n');
           for (let i = 0; i < lines.length; i++) {
             const skupinaMatch = lines[i].match(/Skupina\s+(\d+)/i);
             if (skupinaMatch) {
-              for (let j = Math.max(0, i - 5); j < Math.min(lines.length, i + 10); j++) {
-                const subMatch = lines[j].match(/<font[^>]*size="3"[^>]*><b>([^<]+)<\/b><\/font>/i);
+              // Look forward for the subject (it's usually 1-3 lines after Skupina)
+              for (let j = i; j < Math.min(lines.length, i + 5); j++) {
+                const subMatch = lines[j].match(/<B>([^<]+)<\/B>/i);
                 if (subMatch) {
                   const subject = subMatch[1].trim();
                   const skupinaNum = parseInt(skupinaMatch[1], 10);
 
-                  if (!subjectsMap.has(subject)) {
-                    subjectsMap.set(subject, new Set());
+                  // Filter out numbers and single characters (these are slot numbers)
+                  if (subject && subject.length > 1 && !/^\d+$/.test(subject)) {
+                    if (!subjectsMap.has(subject)) {
+                      subjectsMap.set(subject, new Set());
+                    }
+                    subjectsMap.get(subject).add(skupinaNum);
+                    break;
                   }
-                  subjectsMap.get(subject).add(skupinaNum);
-                  break;
                 }
               }
             }
@@ -234,6 +275,7 @@ app.get('/api/skupinas/:classNum', async (req, res) => {
       result[subject] = Array.from(skupinas).sort((a, b) => a - b);
     });
 
+    console.log(`Found ${Object.keys(result).length} subjects with skupinas`);
     res.json(result);
   } catch (error) {
     console.error('Error fetching skupinas:', error);

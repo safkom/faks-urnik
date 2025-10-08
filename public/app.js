@@ -83,32 +83,43 @@ class TimetableApp {
     }
 
     setupEventListeners() {
-        document.getElementById('refreshBtn').addEventListener('click', () => this.fetchTimetable());
-        document.getElementById('exportAllBtn').addEventListener('click', () => this.downloadAllICS());
-        document.getElementById('settingsBtn').addEventListener('click', () => this.openSettings());
+        const safeHandler = (fn) => {
+            return async (...args) => {
+                try {
+                    await fn(...args);
+                } catch (error) {
+                    console.error('Event handler error:', error);
+                    this.showError(`An error occurred: ${error.message}`);
+                }
+            };
+        };
+
+        document.getElementById('refreshBtn').addEventListener('click', safeHandler(() => this.fetchTimetable()));
+        document.getElementById('exportAllBtn').addEventListener('click', safeHandler(() => this.downloadAllICS()));
+        document.getElementById('settingsBtn').addEventListener('click', safeHandler(() => this.openSettings()));
 
         const todayBtn = document.getElementById('todayBtn');
-        if (todayBtn) todayBtn.addEventListener('click', () => this.scrollToToday());
+        if (todayBtn) todayBtn.addEventListener('click', safeHandler(() => this.scrollToToday()));
 
-        document.getElementById('weekSelect').addEventListener('change', (e) => {
+        document.getElementById('weekSelect').addEventListener('change', safeHandler((e) => {
             const selectedWeek = e.target.value;
             if (this.availableWeeks.find(w => w.value === selectedWeek)) {
                 this.weekNumber = selectedWeek;
                 this.fetchTimetable();
             }
-        });
+        }));
 
-        document.getElementById('classSelect').addEventListener('change', (e) => {
+        document.getElementById('classSelect').addEventListener('change', safeHandler((e) => {
             this.selectedClass = e.target.value;
             try { localStorage.setItem('selectedClass', this.selectedClass); } catch { }
             this.preferences.defaultClass = this.selectedClass;
             this.savePreferences();
             this.fetchTimetable();
-        });
+        }));
 
-        document.getElementById('settingsModal').addEventListener('click', (e) => {
+        document.getElementById('settingsModal').addEventListener('click', safeHandler((e) => {
             if (e.target.id === 'settingsModal') this.closeSettings();
-        });
+        }));
     }
 
     async fetchOptions() {
@@ -201,14 +212,101 @@ class TimetableApp {
         }
     }
 
+    extractClassName(doc) {
+        const bigFont = doc.querySelector('font[size="7"][color="#0000FF"]');
+        return bigFont ? bigFont.textContent.trim() : '';
+    }
+
+    isDayCell(cell) {
+        const boldFont = cell.querySelector('font[size="4"] b');
+        if (!boldFont) return false;
+        const text = boldFont.textContent;
+        return text.includes('Ponedeljek') || text.includes('Torek') ||
+               text.includes('Sreda') || text.includes('Četrtek') ||
+               text.includes('Petek');
+    }
+
+    extractClassInfo(cell, currentDay, cellStartColumn) {
+        const bgcolor = cell.getAttribute('bgcolor');
+        const innerTable = cell.querySelector('table');
+        if (!bgcolor || !innerTable || !currentDay) return null;
+
+        // Calculate slot number: column 0 is day header, columns 1-2 are slot 1, 3-4 are slot 2, etc.
+        // cellStartColumn should be >= 1 for valid slots
+        let slotNum;
+        if (cellStartColumn <= 0) {
+            console.warn(`Invalid cellStartColumn ${cellStartColumn} for class in ${currentDay}`);
+            slotNum = 1; // Default to slot 1 if position is invalid
+        } else {
+            slotNum = Math.floor((cellStartColumn - 1) / 2) + 1;
+        }
+
+        const colspan = parseInt(cell.getAttribute('colspan') || '1');
+
+        const classInfo = {
+            slot: slotNum,
+            subject: '',
+            teacher: '',
+            room: '',
+            note: '',
+            specialNote: '',
+            skupina: null,
+            duration: colspan / 2,
+            color: bgcolor,
+            dayName: currentDay
+        };
+
+        const innerRows = Array.from(innerTable.querySelectorAll('tr'));
+
+        if (innerRows[0]) {
+            const firstRowCells = Array.from(innerRows[0].querySelectorAll('td'));
+            firstRowCells.forEach(td => {
+                const font = td.querySelector('font[size="2"]');
+                if (font) {
+                    const text = font.textContent.trim();
+                    if (text.includes('Skupina')) {
+                        classInfo.note = text;
+                        const match = text.match(/Skupina\s+(\d+)/i);
+                        if (match) classInfo.skupina = parseInt(match[1], 10);
+                    } else if (!classInfo.teacher) {
+                        classInfo.teacher = text;
+                    }
+                }
+            });
+        }
+
+        if (innerRows[1]) {
+            const secondRowCells = Array.from(innerRows[1].querySelectorAll('td'));
+            secondRowCells.forEach(td => {
+                const boldSubject = td.querySelector('font[size="3"] b');
+                if (boldSubject) classInfo.subject = boldSubject.textContent.trim();
+
+                const fonts = Array.from(td.querySelectorAll('font[size="2"]'));
+                fonts.forEach(font => {
+                    const text = font.textContent.trim();
+                    if (text.match(/^\d+$/)) {
+                        classInfo.room = text;
+                    } else if (text && !text.includes('Skupina')) {
+                        if (!classInfo.specialNote) {
+                            classInfo.specialNote = text;
+                        } else {
+                            classInfo.specialNote += ', ' + text;
+                        }
+                    }
+                });
+            });
+        }
+
+        return classInfo.subject ? classInfo : null;
+    }
+
     parseTimetable(html) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
 
         const result = { className: '', weekLabel: '', days: [] };
 
-        const bigFont = doc.querySelector('font[size="7"][color="#0000FF"]');
-        if (bigFont) result.className = bigFont.textContent.trim();
+        result.className = this.extractClassName(doc);
 
         const selectedWeek = this.availableWeeks.find(w => w.value === this.weekNumber);
         if (selectedWeek) result.weekLabel = selectedWeek.display || selectedWeek.label;
@@ -220,10 +318,39 @@ class TimetableApp {
 
         const grid = [];
         const MAX_COLS = 34;
+        const dayClassCellsByColspan = new Map();
+
+        const resolveStartColumn = (dayName, span, desiredPosition, dayStartRow, rowIndex) => {
+            const candidates = [];
+
+            const dayColspanMap = dayClassCellsByColspan.get(dayName);
+            if (dayColspanMap) {
+                const stored = dayColspanMap.get(span);
+                if (stored && stored.length) {
+                    candidates.push(...stored);
+                }
+            }
+
+            for (let prev = rowIndex - 1; prev >= dayStartRow && prev >= 0; prev--) {
+                const prevRow = grid[prev];
+                if (!prevRow) continue;
+                for (let col = 1; col < MAX_COLS; col++) {
+                    const ref = prevRow[col];
+                    if (ref && ref.colspan === span) {
+                        candidates.push(ref.columnPosition);
+                    }
+                }
+            }
+
+            if (!candidates.length) return null;
+
+            const uniqueSorted = Array.from(new Set(candidates)).sort((a, b) => a - b);
+            const target = uniqueSorted.find(pos => pos >= desiredPosition);
+            return target !== undefined ? target : uniqueSorted[uniqueSorted.length - 1];
+        };
 
         let currentDay = null;
         let currentDayStartRow = -1;
-        const dayClassCellsByColspan = new Map();
         const dayData = new Map();
 
         rows.forEach((row, rowIdx) => {
@@ -232,16 +359,7 @@ class TimetableApp {
 
             if (!grid[rowIdx]) grid[rowIdx] = [];
 
-            const dayCell = cells.find(cell => {
-                const boldFont = cell.querySelector('font[size="4"] b');
-                if (boldFont) {
-                    const text = boldFont.textContent;
-                    return text.includes('Ponedeljek') || text.includes('Torek') ||
-                        text.includes('Sreda') || text.includes('Četrtek') ||
-                        text.includes('Petek');
-                }
-                return false;
-            });
+            const dayCell = cells.find(cell => this.isDayCell(cell));
 
             if (dayCell) {
                 const boldFont = dayCell.querySelector('font[size="4"] b');
@@ -271,6 +389,12 @@ class TimetableApp {
             for (let i = 0; i < cells.length; i++) {
                 const cell = cells[i];
 
+                // Ensure grid row exists (but don't overwrite if it already has cells from rowspans)
+                if (!grid[rowIdx]) {
+                    grid[rowIdx] = [];
+                }
+
+                // Skip columns that are occupied by cells from previous rows (due to rowspan)
                 while (grid[rowIdx][columnPosition] !== undefined && columnPosition < MAX_COLS) {
                     columnPosition++;
                 }
@@ -280,24 +404,27 @@ class TimetableApp {
 
                 let cellStartColumn = columnPosition;
 
-                if (i === 0 && cellStartColumn === 0 && cell.getAttribute('bgcolor') && cells.length === 1 && currentDay) {
-                    const dayColspanMap = dayClassCellsByColspan.get(currentDay);
-                    if (dayColspanMap && dayColspanMap.has(colspan)) {
-                        cellStartColumn = dayColspanMap.get(colspan);
-                    } else {
-                        for (let col = 0; col < MAX_COLS; col++) {
-                            if (grid[rowIdx][col] !== undefined) {
-                                cellStartColumn = col;
-                                break;
-                            }
-                        }
+                const isClassCell = cell.getAttribute('bgcolor') && cell.querySelector('table');
+
+                if (isClassCell && currentDay && cellStartColumn === 0) {
+                    const fallbackColumn = resolveStartColumn(currentDay, colspan, columnPosition, currentDayStartRow, rowIdx);
+                    if (typeof fallbackColumn === 'number' && fallbackColumn >= 0) {
+                        cellStartColumn = fallbackColumn;
                     }
                 }
 
-                if (rowIdx === currentDayStartRow && currentDay && cell.getAttribute('bgcolor') && cell.querySelector('table')) {
+                if (rowIdx === currentDayStartRow && currentDay && isClassCell) {
                     const dayColspanMap = dayClassCellsByColspan.get(currentDay);
-                    if (dayColspanMap && !dayColspanMap.has(colspan)) {
-                        dayColspanMap.set(colspan, cellStartColumn);
+                    if (dayColspanMap) {
+                        let stored = dayColspanMap.get(colspan);
+                        if (!stored) {
+                            stored = [];
+                            dayColspanMap.set(colspan, stored);
+                        }
+                        if (!stored.includes(cellStartColumn)) {
+                            stored.push(cellStartColumn);
+                            stored.sort((a, b) => a - b);
+                        }
                     }
                 }
 
@@ -316,70 +443,11 @@ class TimetableApp {
                     }
                 }
 
-                const bgcolor = cell.getAttribute('bgcolor');
-                const innerTable = cell.querySelector('table');
-
-                if (bgcolor && innerTable && currentDay) {
-                    const slotNum = cellStartColumn === 0 ? 0 : Math.floor((cellStartColumn - 1) / 2) + 1;
-                    const classInfo = {
-                        slot: slotNum,
-                        subject: '',
-                        teacher: '',
-                        room: '',
-                        note: '',
-                        specialNote: '',
-                        skupina: null,
-                        duration: colspan / 2,
-                        color: bgcolor,
-                        dayName: currentDay
-                    };
-
-                    const innerRows = Array.from(innerTable.querySelectorAll('tr'));
-
-                    if (innerRows[0]) {
-                        const firstRowCells = Array.from(innerRows[0].querySelectorAll('td'));
-                        firstRowCells.forEach(td => {
-                            const font = td.querySelector('font[size="2"]');
-                            if (font) {
-                                const text = font.textContent.trim();
-                                if (text.includes('Skupina')) {
-                                    classInfo.note = text;
-                                    const match = text.match(/Skupina\s+(\d+)/i);
-                                    if (match) classInfo.skupina = parseInt(match[1], 10);
-                                } else if (!classInfo.teacher) {
-                                    classInfo.teacher = text;
-                                }
-                            }
-                        });
-                    }
-
-                    if (innerRows[1]) {
-                        const secondRowCells = Array.from(innerRows[1].querySelectorAll('td'));
-                        secondRowCells.forEach(td => {
-                            const boldSubject = td.querySelector('font[size="3"] b');
-                            if (boldSubject) classInfo.subject = boldSubject.textContent.trim();
-
-                            const fonts = Array.from(td.querySelectorAll('font[size="2"]'));
-                            fonts.forEach(font => {
-                                const text = font.textContent.trim();
-                                if (text.match(/^\d+$/)) {
-                                    classInfo.room = text;
-                                } else if (text && !text.includes('Skupina')) {
-                                    if (!classInfo.specialNote) {
-                                        classInfo.specialNote = text;
-                                    } else {
-                                        classInfo.specialNote += ', ' + text;
-                                    }
-                                }
-                            });
-                        });
-                    }
-
-                    if (classInfo.subject) {
-                        const dayInfo = dayData.get(currentDay);
-                        if (dayInfo && !dayInfo.note) {
-                            dayInfo.classes.push(classInfo);
-                        }
+                const classInfo = this.extractClassInfo(cell, currentDay, cellStartColumn);
+                if (classInfo) {
+                    const dayInfo = dayData.get(currentDay);
+                    if (dayInfo && !dayInfo.note) {
+                        dayInfo.classes.push(classInfo);
                     }
                 }
 
@@ -408,46 +476,135 @@ class TimetableApp {
         return endSlot ? `${startSlot.start}-${endSlot.end}` : `${startSlot.start}-${startSlot.end}`;
     }
 
+    generateICSEvent(cls) {
+        const startSlot = this.timeSlots.find(s => s.id === cls.slot);
+        if (!startSlot) return null;
+
+        const endSlotId = cls.slot + (cls.duration || 1) - 1;
+        const endSlot = this.timeSlots.find(s => s.id === endSlotId) || startSlot;
+
+        const dateMatch = cls.dayName.match(/(\d+)\.(\d+)\.(\d{4})?/);
+        if (!dateMatch) return null;
+
+        const dayNum = parseInt(dateMatch[1], 10);
+        const month = parseInt(dateMatch[2], 10);
+        let year = dateMatch[3] ? parseInt(dateMatch[3], 10) : null;
+
+        if (!year && this.timetable.weekLabel) {
+            const weekYearMatch = this.timetable.weekLabel.match(/\.(\d{4})$/);
+            if (weekYearMatch) {
+                year = parseInt(weekYearMatch[1], 10);
+            }
+        }
+
+        if (!year) {
+            const now = new Date();
+            year = now.getFullYear();
+            if (now.getMonth() === 11 && month <= 8) {
+                year++;
+            }
+            if (now.getMonth() <= 7 && month >= 9) {
+                year--;
+            }
+        }
+
+        const eventDate = new Date(year, month - 1, dayNum);
+
+        if (eventDate.getDate() !== dayNum || eventDate.getMonth() !== month - 1 || eventDate.getFullYear() !== year) {
+            console.warn(`Invalid date in ICS export: ${dayNum}.${month}.${year} for class ${cls.subject}`);
+            return null;
+        }
+
+        const dayNameLower = cls.dayName.toLowerCase();
+        const dayOfWeek = eventDate.getDay();
+        const expectedDayOfWeek = dayNameLower.includes('ponedeljek') ? 1 :
+                                 dayNameLower.includes('torek') ? 2 :
+                                 dayNameLower.includes('sreda') || dayNameLower.includes('sredo') ? 3 :
+                                 dayNameLower.includes('četrtek') ? 4 :
+                                 dayNameLower.includes('petek') ? 5 : -1;
+
+        if (expectedDayOfWeek !== -1 && dayOfWeek !== expectedDayOfWeek) {
+            console.warn(`Day of week mismatch for ${cls.subject}: expected ${expectedDayOfWeek}, got ${dayOfWeek} for date ${dayNum}.${month}.${year}`);
+            return null;
+        }
+
+        if (dayOfWeek === 0 || dayOfWeek === 6) {
+            console.warn(`Skipping weekend class: ${cls.subject} on ${dayNum}.${month}.${year}`);
+            return null;
+        }
+
+        const d = dayNum.toString().padStart(2, '0');
+        const m = month.toString().padStart(2, '0');
+        const y = year.toString();
+
+        // Format times properly: "8:05" -> "080500", "13:50" -> "135000"
+        const formatTime = (timeStr) => {
+            const [hours, minutes] = timeStr.split(':');
+            return `${hours.padStart(2, '0')}${minutes.padStart(2, '0')}00`;
+        };
+
+        const startTime = formatTime(startSlot.start);
+        const endTime = formatTime(endSlot.end);
+
+        let description = `Class: ${this.timetable.className}\\nTeacher: ${cls.teacher || 'N/A'}\\nRoom: ${cls.room || 'N/A'}`;
+        if (cls.specialNote) {
+            description += `\\nNote: ${cls.specialNote}`;
+        }
+
+        const summary = cls.subject + (cls.note ? ' - ' + cls.note : '') + (cls.specialNote ? ` (${cls.specialNote})` : '');
+
+        return `BEGIN:VEVENT
+UID:${cls.subject}-${d}${m}${y}-${startTime}@sckranj.si
+DTSTAMP:${y}${m}${d}T${startTime}00
+DTSTART:${y}${m}${d}T${startTime}00
+DTEND:${y}${m}${d}T${endTime}00
+SUMMARY:${summary}
+DESCRIPTION:${description}
+LOCATION:Room ${cls.room || 'TBD'}
+END:VEVENT
+`;
+    }
+
     downloadICS(dayIndex, classIndex) {
         if (!this.timetable || !this.timetable.days[dayIndex]) return;
         const day = this.timetable.days[dayIndex];
         if (!day.classes || !day.classes[classIndex]) return;
         const classInfo = day.classes[classIndex];
 
-        const startSlot = this.timeSlots.find(s => s.id === classInfo.slot);
-        if (!startSlot) return;
-
-        const endSlotId = classInfo.slot + (classInfo.duration || 1) - 1;
-        const endSlot = this.timeSlots.find(s => s.id === endSlotId) || startSlot;
-
-        const dateMatch = classInfo.dayName.match(/(\d+)\.(\d+)\.?/);
-        if (!dateMatch) return;
-
-        const day_num = dateMatch[1].padStart(2, '0');
-        const month = dateMatch[2].padStart(2, '0');
-        const year = new Date().getFullYear();
-
-        const startTime = startSlot.start.replace(':', '');
-        const endTime = endSlot.end.replace(':', '');
+        const event = this.generateICSEvent(classInfo);
+        if (!event) return;
 
         const icsContent = `BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//ŠC Kranj//Urnik//EN
-BEGIN:VEVENT
-UID:${classInfo.subject}-${day_num}${month}${year}-${startTime}@sckranj.si
-DTSTAMP:${year}${month}${day_num}T${startTime}00
-DTSTART:${year}${month}${day_num}T${startTime}00
-DTEND:${year}${month}${day_num}T${endTime}00
-SUMMARY:${classInfo.subject}${classInfo.note ? ' - ' + classInfo.note : ''}
-DESCRIPTION:Class: ${this.timetable.className}\\nTeacher: ${classInfo.teacher || 'N/A'}\\nRoom: ${classInfo.room || 'N/A'}
-LOCATION:Room ${classInfo.room || 'TBD'}
-END:VEVENT
-END:VCALENDAR`;
+${event}END:VCALENDAR`;
 
         const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = `${classInfo.subject.replace(/\s+/g, '_')}_${classInfo.dayName.split(' ')[0]}.ics`;
+        link.click();
+    }
+
+    downloadDayICS(dayIndex) {
+        if (!this.timetable || !this.timetable.days[dayIndex]) return;
+        const day = this.timetable.days[dayIndex];
+
+        let allEvents = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ŠC Kranj//Urnik//EN\n';
+
+        day.classes.forEach(cls => {
+            if (!this.shouldShowClass(cls)) return;
+            const event = this.generateICSEvent(cls);
+            if (event) allEvents += event;
+        });
+
+        allEvents += 'END:VCALENDAR';
+
+        const blob = new Blob([allEvents], { type: 'text/calendar;charset=utf-8' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        const dayName = day.day.split(' ')[0].replace(/,/g, '');
+        link.download = `${this.timetable.className.replace(/\s+/g, '_')}_${dayName}.ics`;
         link.click();
     }
 
@@ -458,86 +615,9 @@ END:VCALENDAR`;
 
         this.timetable.days.forEach(day => {
             day.classes.forEach(cls => {
-                const startSlot = this.timeSlots.find(s => s.id === cls.slot);
-                if (!startSlot) return;
-
-                const endSlotId = cls.slot + (cls.duration || 1) - 1;
-                const endSlot = this.timeSlots.find(s => s.id === endSlotId) || startSlot;
-
-                const dateMatch = cls.dayName.match(/(\d+)\.(\d+)\.(\d{4})?/);
-                if (!dateMatch) return;
-
-                const day = parseInt(dateMatch[1], 10);
-                const month = parseInt(dateMatch[2], 10);
-                let year = dateMatch[3] ? parseInt(dateMatch[3], 10) : null;
-
-                if (!year && this.timetable.weekLabel) {
-                    const weekYearMatch = this.timetable.weekLabel.match(/\.(\d{4})$/);
-                    if (weekYearMatch) {
-                        year = parseInt(weekYearMatch[1], 10);
-                    }
-                }
-
-                if (!year) {
-                    const now = new Date();
-                    year = now.getFullYear();
-                    if (now.getMonth() === 11 && month <= 8) {
-                        year++;
-                    }
-                    if (now.getMonth() <= 7 && month >= 9) {
-                        year--;
-                    }
-                }
-
-                const eventDate = new Date(year, month - 1, day);
-
-                if (eventDate.getDate() !== day || eventDate.getMonth() !== month - 1 || eventDate.getFullYear() !== year) {
-                    console.warn(`Invalid date in ICS export: ${day}.${month}.${year} for class ${cls.subject}`);
-                    return;
-                }
-
-                const dayNameLower = cls.dayName.toLowerCase();
-                const dayOfWeek = eventDate.getDay();
-                const expectedDayOfWeek = dayNameLower.includes('ponedeljek') ? 1 :
-                                         dayNameLower.includes('torek') ? 2 :
-                                         dayNameLower.includes('sreda') || dayNameLower.includes('sredo') ? 3 :
-                                         dayNameLower.includes('četrtek') ? 4 :
-                                         dayNameLower.includes('petek') ? 5 : -1;
-
-                if (expectedDayOfWeek !== -1 && dayOfWeek !== expectedDayOfWeek) {
-                    console.warn(`Day of week mismatch for ${cls.subject}: expected ${expectedDayOfWeek}, got ${dayOfWeek} for date ${day}.${month}.${year}`);
-                    return;
-                }
-
-                if (dayOfWeek === 0 || dayOfWeek === 6) {
-                    console.warn(`Skipping weekend class: ${cls.subject} on ${day}.${month}.${year}`);
-                    return;
-                }
-
-                const d = day.toString().padStart(2, '0');
-                const m = month.toString().padStart(2, '0');
-                const y = year.toString();
-
-                const startTime = startSlot.start.replace(':', '');
-                const endTime = endSlot.end.replace(':', '');
-
-                let description = `Class: ${this.timetable.className}\\nTeacher: ${cls.teacher || 'N/A'}\\nRoom: ${cls.room || 'N/A'}`;
-                if (cls.specialNote) {
-                    description += `\\nNote: ${cls.specialNote}`;
-                }
-
-                const summary = cls.subject + (cls.note ? ' - ' + cls.note : '') + (cls.specialNote ? ` (${cls.specialNote})` : '');
-
-                allEvents += `BEGIN:VEVENT
-UID:${cls.subject}-${d}${m}${y}-${startTime}@sckranj.si
-DTSTAMP:${y}${m}${d}T${startTime}00
-DTSTART:${y}${m}${d}T${startTime}00
-DTEND:${y}${m}${d}T${endTime}00
-SUMMARY:${summary}
-DESCRIPTION:${description}
-LOCATION:Room ${cls.room || 'TBD'}
-END:VEVENT
-`;
+                if (!this.shouldShowClass(cls)) return;
+                const event = this.generateICSEvent(cls);
+                if (event) allEvents += event;
             });
         });
 
@@ -844,7 +924,6 @@ END:VEVENT
 
     async loadOnboardingSubjects() {
         const classValue = this.tempPreferences.defaultClass;
-        console.log(classValue);
         await this.fetchAllSkupinasForClass(classValue);
 
         const subjects = Array.from(this.allSkupinasMap.keys()).sort();
@@ -991,11 +1070,30 @@ END:VEVENT
             const visibleClasses = day.classes.filter(cls => this.shouldShowClass(cls));
 
             const dayCard = document.createElement('div');
-            dayCard.className = `bg-[#1a1a2e] rounded-lg shadow-md overflow-hidden mb-6 ${isToday ? 'border-2 border-indigo-500' : ''}`;
+            dayCard.className = `day-card bg-[#1a1a2e] rounded-lg shadow-md overflow-hidden mb-6 ${isToday ? 'border-2 border-indigo-500' : ''}`;
 
             const dayHeader = document.createElement('div');
-            dayHeader.className = 'bg-gray-800 p-3 font-bold text-white text-bold border-b border-gray-600';
-            dayHeader.textContent = day.day;
+            dayHeader.className = 'day-header bg-gray-800 p-3 font-bold text-white text-bold border-b border-gray-600 flex justify-between items-center';
+
+            const dayTitle = document.createElement('span');
+            dayTitle.textContent = day.day;
+            dayHeader.appendChild(dayTitle);
+
+            if (visibleClasses.length > 0 && !day.note) {
+                const exportBtn = document.createElement('button');
+                exportBtn.className = 'text-green-400 hover:text-green-300 cursor-pointer';
+                exportBtn.title = 'Izvozi dan';
+                exportBtn.onclick = () => this.downloadDayICS(dayIdx);
+                exportBtn.innerHTML = `
+                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                `;
+                dayHeader.appendChild(exportBtn);
+            }
+
             dayCard.appendChild(dayHeader);
 
             const dayContent = document.createElement('div');
