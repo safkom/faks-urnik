@@ -1,4 +1,35 @@
-// Timetable App - Vanilla JavaScript
+const OPTIONS_CACHE_KEY = 'cachedOptions';
+const DEFAULT_CLASS_LIST = [
+    { value: '1', label: 'RAI 1.l' },
+    { value: '2', label: 'RAI 2.l' },
+    { value: '3', label: 'INF 2.l' },
+    { value: '4', label: 'RAI 1.c' },
+    { value: '5', label: 'RAI 2.c' },
+    { value: '6', label: 'INF 3.c' },
+    { value: '7', label: 'MEH 1.l' },
+    { value: '8', label: 'MEH 2.l' },
+    { value: '9', label: 'MEH 1.c' },
+    { value: '10', label: 'MEH 2.c' },
+    { value: '11', label: 'MEH 3.c' },
+    { value: '12', label: 'ENE 1.l' },
+    { value: '13', label: 'ENE 2.l' },
+    { value: '14', label: 'ENE 1.c' },
+    { value: '15', label: 'ENE 2.c' },
+    { value: '16', label: 'ENE 3.c' },
+    { value: '17', label: 'VAR 1.c' },
+    { value: '18', label: 'VAR 2.c' },
+    { value: '19', label: 'VAR 3.c' },
+    { value: '20', label: 'EKN 1.l' },
+    { value: '21', label: 'EKN 2.l Kom' },
+    { value: '22', label: 'EKN 2.l Rač' },
+    { value: '23', label: 'EKN 1.c Rač' },
+    { value: '24', label: 'EKN 2.c Rač' },
+    { value: '25', label: 'EKN 2.c Kom' },
+    { value: '26', label: 'EKN 3.c Kom' },
+    { value: '27', label: 'OSM 1.c' },
+    { value: '28', label: 'OSM 2.c' }
+];
+
 function darkenColor(hex, amount) {
     if (!hex || !/^#[0-9A-F]{6}$/i.test(hex)) return hex;
     let [r, g, b] = hex.substring(1).match(/.{2}/g).map(c => parseInt(c, 16));
@@ -19,9 +50,14 @@ class TimetableApp {
         this.availableClasses = [];
         this.visibleSubjects = this.preferences.visibleSubjects || {};
         this.selectedSkupine = this.preferences.selectedSkupine || {};
+
+    this.sessionSkupine = { ...this.selectedSkupine };
         this.tempPreferences = null;
         this.onboardingCurrentStep = 1;
         this.onboardingTotalSteps = 3;
+        this.classMetaCache = new Map();
+        this.currentClassMeta = null;
+        this.skupinaFiltersExpanded = false;
 
         this.timeSlots = [
             { id: 1, start: '7:15', end: '8:00' },
@@ -74,6 +110,28 @@ class TimetableApp {
         };
     }
 
+    loadCachedOptions() {
+        try {
+            const raw = localStorage.getItem(OPTIONS_CACHE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return null;
+            return parsed;
+        } catch (e) {
+            console.warn('Failed to load cached options:', e);
+            return null;
+        }
+    }
+
+    saveCachedOptions(data) {
+        if (!data) return;
+        try {
+            localStorage.setItem(OPTIONS_CACHE_KEY, JSON.stringify(data));
+        } catch (e) {
+            console.warn('Failed to cache options:', e);
+        }
+    }
+
     savePreferences() {
         try {
             localStorage.setItem('userPreferences', JSON.stringify(this.preferences));
@@ -95,7 +153,17 @@ class TimetableApp {
         };
 
         document.getElementById('refreshBtn').addEventListener('click', safeHandler(() => this.fetchTimetable()));
-        document.getElementById('exportAllBtn').addEventListener('click', safeHandler(() => this.downloadAllICS()));
+        const exportMenuBtn = document.getElementById('exportMenuBtn');
+        if (exportMenuBtn) {
+            exportMenuBtn.addEventListener('click', () => this.toggleExportMenu());
+            document.addEventListener('click', (e) => {
+                const dropdown = document.getElementById('exportDropdown');
+                if (!dropdown) return;
+                if (!exportMenuBtn.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('hidden');
+                }
+            });
+        }
         document.getElementById('settingsBtn').addEventListener('click', safeHandler(() => this.openSettings()));
 
         const todayBtn = document.getElementById('todayBtn');
@@ -120,52 +188,91 @@ class TimetableApp {
         document.getElementById('settingsModal').addEventListener('click', safeHandler((e) => {
             if (e.target.id === 'settingsModal') this.closeSettings();
         }));
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.closeExportMenu();
+                this.closeDayExportModal();
+                if (this.eventExportMode) this.disableEventExportMode();
+            }
+        });
     }
 
     async fetchOptions() {
+        let data = null;
         try {
             const response = await fetch('/api/options');
             if (!response.ok) throw new Error('Failed to fetch options');
 
-            const data = await response.json();
-
-            this.availableWeeks = (data.weeks || []).map(w => {
-                const m = (w.label || '').match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-                let display = w.label;
-                let startDate = null;
-                let endDate = null;
-                let isCurrent = false;
-                if (m) {
-                    const d = parseInt(m[1], 10);
-                    const mo = parseInt(m[2], 10) - 1;
-                    const y = parseInt(m[3], 10);
-                    startDate = new Date(y, mo, d);
-                    endDate = new Date(y, mo, d + 4);
-                    const fmt = (date) => `${date.getDate()}.${date.getMonth() + 1}.`;
-                    display = `${fmt(startDate)} - ${fmt(endDate)}`;
-                    const now = new Date();
-                    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                    const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-                    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-                    isCurrent = today >= start && today <= end;
-                }
-                return { ...w, display, startDate, endDate, isCurrent };
-            });
-            this.availableClasses = data.classes || [];
-
-            const current = this.availableWeeks.find(w => w.isCurrent);
-            if (current) this.weekNumber = current.value;
-            else if (this.availableWeeks.length > 0) this.weekNumber = this.availableWeeks[0].value;
-
-            this.renderWeekSelect();
-            this.renderClassSelect();
+            data = await response.json();
+            this.saveCachedOptions(data);
         } catch (err) {
             console.error('Error fetching options:', err);
+            data = this.loadCachedOptions() || null;
+            if (!data) {
+                data = { weeks: [], classes: [] };
+            }
         }
+
+        const classesSource = Array.isArray(data.classes) && data.classes.length ? data.classes : DEFAULT_CLASS_LIST;
+        this.availableClasses = classesSource.slice();
+
+        if (!this.availableClasses.some(cls => cls.value === this.selectedClass)) {
+            const fallbackClass = this.availableClasses[0];
+            if (fallbackClass) {
+                this.selectedClass = fallbackClass.value;
+                this.preferences.defaultClass = this.selectedClass;
+                this.savePreferences();
+            }
+        }
+
+        const processedWeeks = (Array.isArray(data.weeks) ? data.weeks : []).map(w => {
+            const m = (w.label || '').match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+            let display = w.label;
+            let startDate = null;
+            let endDate = null;
+            let isCurrent = false;
+            if (m) {
+                const d = parseInt(m[1], 10);
+                const mo = parseInt(m[2], 10) - 1;
+                const y = parseInt(m[3], 10);
+                startDate = new Date(y, mo, d);
+                endDate = new Date(y, mo, d + 4);
+                const fmt = (date) => `${date.getDate()}.${date.getMonth() + 1}.`;
+                display = `${fmt(startDate)} - ${fmt(endDate)}`;
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+                const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+                isCurrent = today >= start && today <= end;
+            }
+            return { ...w, display, startDate, endDate, isCurrent };
+        });
+
+        if (processedWeeks.length) {
+            this.availableWeeks = processedWeeks;
+            const current = this.availableWeeks.find(w => w.isCurrent);
+            if (current) {
+                this.weekNumber = current.value;
+            } else if (!this.availableWeeks.find(w => w.value === this.weekNumber)) {
+                this.weekNumber = this.availableWeeks[0].value;
+            }
+        } else if (!this.availableWeeks.length) {
+            this.availableWeeks = [];
+        }
+
+        this.renderWeekSelect();
+        this.renderClassSelect();
     }
 
     renderWeekSelect() {
         const select = document.getElementById('weekSelect');
+        if (!select) return;
+        if (!Array.isArray(this.availableWeeks) || this.availableWeeks.length === 0) {
+            select.innerHTML = '<option value="">Ni tednov na voljo</option>';
+            select.disabled = true;
+            return;
+        }
+        select.disabled = false;
         select.innerHTML = this.availableWeeks.map(week => {
             const text = `${week.display || week.label}${week.isCurrent ? ' (trenutni)' : ''}`;
             return `<option value="${week.value}" ${week.value === this.weekNumber ? 'selected' : ''}>${text}</option>`;
@@ -174,6 +281,13 @@ class TimetableApp {
 
     renderClassSelect() {
         const select = document.getElementById('classSelect');
+        if (!select) return;
+        if (!Array.isArray(this.availableClasses) || this.availableClasses.length === 0) {
+            select.innerHTML = '<option value="">Ni razredov na voljo</option>';
+            select.disabled = true;
+            return;
+        }
+        select.disabled = false;
         select.innerHTML = this.availableClasses.map(cls =>
             `<option value="${cls.value}" ${cls.value === this.selectedClass ? 'selected' : ''}>${cls.label}</option>`
         ).join('');
@@ -183,13 +297,17 @@ class TimetableApp {
         this.loading = true;
         [
             document.getElementById('refreshBtn'),
-            document.getElementById('exportAllBtn'),
+            document.getElementById('exportMenuBtn'),
             document.getElementById('weekSelect'),
             document.getElementById('classSelect')
         ].forEach(el => { if (el) el.disabled = true; });
         this.render();
 
         try {
+            await this.fetchClassMetadata(this.selectedClass, { setCurrent: true });
+
+            this.sessionSkupine = { ...this.selectedSkupine };
+
             const url = `/api/timetable/${this.weekNumber}/${this.selectedClass}`;
 
             const response = await fetch(url);
@@ -205,7 +323,7 @@ class TimetableApp {
             this.render();
             [
                 document.getElementById('refreshBtn'),
-                document.getElementById('exportAllBtn'),
+                document.getElementById('exportMenuBtn'),
                 document.getElementById('weekSelect'),
                 document.getElementById('classSelect')
             ].forEach(el => { if (el) el.disabled = false; });
@@ -231,12 +349,10 @@ class TimetableApp {
         const innerTable = cell.querySelector('table');
         if (!bgcolor || !innerTable || !currentDay) return null;
 
-        // Calculate slot number: column 0 is day header, columns 1-2 are slot 1, 3-4 are slot 2, etc.
-        // cellStartColumn should be >= 1 for valid slots
         let slotNum;
         if (cellStartColumn <= 0) {
             console.warn(`Invalid cellStartColumn ${cellStartColumn} for class in ${currentDay}`);
-            slotNum = 1; // Default to slot 1 if position is invalid
+            slotNum = 1;
         } else {
             slotNum = Math.floor((cellStartColumn - 1) / 2) + 1;
         }
@@ -389,12 +505,10 @@ class TimetableApp {
             for (let i = 0; i < cells.length; i++) {
                 const cell = cells[i];
 
-                // Ensure grid row exists (but don't overwrite if it already has cells from rowspans)
                 if (!grid[rowIdx]) {
                     grid[rowIdx] = [];
                 }
 
-                // Skip columns that are occupied by cells from previous rows (due to rowspan)
                 while (grid[rowIdx][columnPosition] !== undefined && columnPosition < MAX_COLS) {
                     columnPosition++;
                 }
@@ -537,32 +651,39 @@ class TimetableApp {
         const m = month.toString().padStart(2, '0');
         const y = year.toString();
 
-        // Format times properly: "8:05" -> "080500", "13:50" -> "135000"
         const formatTime = (timeStr) => {
             const [hours, minutes] = timeStr.split(':');
             return `${hours.padStart(2, '0')}${minutes.padStart(2, '0')}00`;
         };
 
-        const startTime = formatTime(startSlot.start);
-        const endTime = formatTime(endSlot.end);
+        const startTime = formatTime(startSlot.start); // HHMMSS
+        const endTime = formatTime(endSlot.end);       // HHMMSS
 
         let description = `Class: ${this.timetable.className}\\nTeacher: ${cls.teacher || 'N/A'}\\nRoom: ${cls.room || 'N/A'}`;
         if (cls.specialNote) {
             description += `\\nNote: ${cls.specialNote}`;
         }
 
-        const summary = cls.subject + (cls.note ? ' - ' + cls.note : '') + (cls.specialNote ? ` (${cls.specialNote})` : '');
+        const rawSummary = cls.subject + (cls.note ? ' - ' + cls.note : '') + (cls.specialNote ? ` (${cls.specialNote})` : '');
+        const escapeText = (txt) => (txt || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,');
+        const summary = escapeText(rawSummary);
+        description = escapeText(description);
 
-        return `BEGIN:VEVENT
-UID:${cls.subject}-${d}${m}${y}-${startTime}@sckranj.si
-DTSTAMP:${y}${m}${d}T${startTime}00
-DTSTART:${y}${m}${d}T${startTime}00
-DTEND:${y}${m}${d}T${endTime}00
-SUMMARY:${summary}
-DESCRIPTION:${description}
-LOCATION:Room ${cls.room || 'TBD'}
-END:VEVENT
-`;
+        const uidSubject = (cls.subject || 'event').replace(/[^A-Za-z0-9_-]/g, '');
+        const uid = `${uidSubject}-${y}${m}${d}T${startTime}@sckranj.si`;
+
+        return [
+            'BEGIN:VEVENT',
+            `UID:${uid}`,
+            `DTSTAMP:${y}${m}${d}T${startTime}`,
+            `DTSTART:${y}${m}${d}T${startTime}`,
+            `DTEND:${y}${m}${d}T${endTime}`,
+            `SUMMARY:${summary}`,
+            `DESCRIPTION:${description}`,
+            `LOCATION:Room ${escapeText(cls.room || 'TBD')}`,
+            'END:VEVENT',
+            ''
+        ].join('\n');
     }
 
     downloadICS(dayIndex, classIndex) {
@@ -574,12 +695,17 @@ END:VEVENT
         const event = this.generateICSEvent(classInfo);
         if (!event) return;
 
-        const icsContent = `BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//ŠC Kranj//Urnik//EN
-${event}END:VCALENDAR`;
+        const header = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//ŠC Kranj//Urnik//EN',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH'
+        ].join('\n');
+        const icsContent = `${header}\n${event}END:VCALENDAR`;
+        const finalContent = icsContent.replace(/\r?\n/g, '\r\n');
 
-        const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+        const blob = new Blob([finalContent], { type: 'text/calendar;charset=utf-8' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = `${classInfo.subject.replace(/\s+/g, '_')}_${classInfo.dayName.split(' ')[0]}.ics`;
@@ -590,7 +716,13 @@ ${event}END:VCALENDAR`;
         if (!this.timetable || !this.timetable.days[dayIndex]) return;
         const day = this.timetable.days[dayIndex];
 
-        let allEvents = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ŠC Kranj//Urnik//EN\n';
+        let allEvents = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//ŠC Kranj//Urnik//EN',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH'
+        ].join('\n') + '\n';
 
         day.classes.forEach(cls => {
             if (!this.shouldShowClass(cls)) return;
@@ -598,9 +730,10 @@ ${event}END:VCALENDAR`;
             if (event) allEvents += event;
         });
 
-        allEvents += 'END:VCALENDAR';
+    allEvents += 'END:VCALENDAR';
+    const finalContent = allEvents.replace(/\r?\n/g, '\r\n');
 
-        const blob = new Blob([allEvents], { type: 'text/calendar;charset=utf-8' });
+    const blob = new Blob([finalContent], { type: 'text/calendar;charset=utf-8' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         const dayName = day.day.split(' ')[0].replace(/,/g, '');
@@ -608,26 +741,102 @@ ${event}END:VCALENDAR`;
         link.click();
     }
 
-    downloadAllICS() {
+    downloadAllICS() { this.exportWeekICS(); }
+
+    exportWeekICS() {
         if (!this.timetable) return;
-
-        let allEvents = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//ŠC Kranj//Urnik//EN\n';
-
+        let allEvents = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//ŠC Kranj//Urnik//EN',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH'
+        ].join('\n') + '\n';
         this.timetable.days.forEach(day => {
             day.classes.forEach(cls => {
                 if (!this.shouldShowClass(cls)) return;
-                const event = this.generateICSEvent(cls);
-                if (event) allEvents += event;
+                const ev = this.generateICSEvent(cls);
+                if (ev) allEvents += ev;
             });
         });
-
         allEvents += 'END:VCALENDAR';
+        this.triggerDownload(allEvents.replace(/\r?\n/g, '\r\n'), `${this.timetable.className.replace(/\s+/g, '_')}_teden_${this.weekNumber}.ics`);
+    }
 
-        const blob = new Blob([allEvents], { type: 'text/calendar;charset=utf-8' });
+    openDayExportModal() {
+        if (!this.timetable) return;
+        const modal = document.getElementById('dayExportModal');
+        const list = document.getElementById('dayExportCheckboxes');
+        if (!modal || !list) return;
+        list.innerHTML = '';
+        this.timetable.days.forEach((day, idx) => {
+            const visibleCount = day.classes.filter(c => this.shouldShowClass(c)).length;
+            if (visibleCount === 0) return;
+            const id = `day-exp-${idx}`;
+            list.innerHTML += `<label class="flex items-center gap-2"><input type="checkbox" id="${id}" data-day-index="${idx}" checked> <span>${day.day}</span></label>`;
+        });
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+
+    closeDayExportModal() {
+        const modal = document.getElementById('dayExportModal');
+        if (modal) { modal.classList.add('hidden'); modal.classList.remove('flex'); }
+    }
+
+    exportSelectedDaysICS() {
+        if (!this.timetable) return;
+        const checks = Array.from(document.querySelectorAll('#dayExportCheckboxes input[type="checkbox"]'));
+        const selectedIdx = checks.filter(c => c.checked).map(c => parseInt(c.dataset.dayIndex, 10));
+        if (!selectedIdx.length) { this.closeDayExportModal(); return; }
+        let allEvents = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//ŠC Kranj//Urnik//EN',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH'
+        ].join('\n') + '\n';
+        selectedIdx.forEach(i => {
+            const day = this.timetable.days[i];
+            day.classes.forEach(cls => {
+                if (!this.shouldShowClass(cls)) return;
+                const ev = this.generateICSEvent(cls);
+                if (ev) allEvents += ev;
+            });
+        });
+        allEvents += 'END:VCALENDAR';
+        this.triggerDownload(allEvents.replace(/\r?\n/g, '\r\n'), `${this.timetable.className.replace(/\s+/g, '_')}_dnevi_${this.weekNumber}.ics`);
+        this.closeDayExportModal();
+    }
+
+    enableEventExportMode() {
+        this.eventExportMode = true;
+        this.render();
+    }
+
+    disableEventExportMode() {
+        this.eventExportMode = false;
+        this.render();
+    }
+
+    triggerDownload(content, filename) {
+        const fixed = content.replace(/\r?\n/g, '\r\n');
+        const blob = new Blob([fixed], { type: 'text/calendar;charset=utf-8' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `${this.timetable.className.replace(/\s+/g, '_')}_week_${this.weekNumber}.ics`;
+        link.download = filename;
         link.click();
+    }
+
+    toggleExportMenu() {
+        const dd = document.getElementById('exportDropdown');
+        if (!dd) return;
+        dd.classList.toggle('hidden');
+    }
+
+    closeExportMenu() {
+        const dd = document.getElementById('exportDropdown');
+        if (dd) dd.classList.add('hidden');
     }
 
     showError(message) {
@@ -658,24 +867,129 @@ ${event}END:VCALENDAR`;
         return subjectsMap;
     }
 
+    getBaseSubjectName(subject) {
+        if (!subject) return subject;
+        return subject.endsWith(' lv') ? subject.slice(0, -3).trim() : subject.trim();
+    }
+
+    getSubjectDisplayName(subject) {
+        if (!subject) return subject;
+        return this.getBaseSubjectName(subject);
+    }
+
+    getSubjectVariants(subject) {
+        const baseName = this.getBaseSubjectName(subject);
+        return [baseName, `${baseName} lv`];
+    }
+
+    hasSkupinasForSubject(subject) {
+        const base = this.getBaseSubjectName(subject);
+        const variants = this.getSubjectVariants(subject);
+        for (const variant of variants) {
+            if (this.allSkupinasMap?.has?.(variant)) {
+                const set = this.allSkupinasMap.get(variant);
+                if (set && set.size > 0) return true;
+            }
+        }
+        return false;
+    }
+
+    getSkupinasForSubject(subject) {
+        const variants = this.getSubjectVariants(subject);
+        const combined = new Set();
+        variants.forEach(variant => {
+            const set = this.allSkupinasMap?.get?.(variant);
+            if (set) {
+                set.forEach(v => combined.add(v));
+            }
+        });
+        return Array.from(combined).sort((a, b) => a - b);
+    }
+
+    normalizePreferencesWithMeta(meta, target) {
+        if (!meta || !meta.baseSubjects || !target) return;
+        const { baseSubjects } = meta;
+        if (!target.visibleSubjects) target.visibleSubjects = {};
+        if (!target.selectedSkupine) target.selectedSkupine = {};
+
+        const visible = target.visibleSubjects;
+        const selected = target.selectedSkupine;
+
+        baseSubjects.forEach((info, baseSubject) => {
+            if (!info) return;
+            let baseVisible = Object.prototype.hasOwnProperty.call(visible, baseSubject) ? visible[baseSubject] : undefined;
+            if (baseVisible === undefined) {
+                const variantHidden = info.variants?.some?.(variant => visible[variant] === false);
+                if (variantHidden) baseVisible = false;
+            }
+            info.variants?.forEach?.(variant => {
+                if (variant !== baseSubject && Object.prototype.hasOwnProperty.call(visible, variant)) {
+                    delete visible[variant];
+                }
+            });
+            if (baseVisible === false) {
+                visible[baseSubject] = false;
+            }
+        });
+
+        baseSubjects.forEach((info, baseSubject) => {
+            if (!info) return;
+            let chosen = Object.prototype.hasOwnProperty.call(selected, baseSubject) ? selected[baseSubject] : undefined;
+            if (chosen === undefined) {
+                for (const variant of info.variants || []) {
+                    if (Object.prototype.hasOwnProperty.call(selected, variant)) {
+                        chosen = selected[variant];
+                        break;
+                    }
+                }
+            }
+            (info.variants || []).forEach(variant => {
+                if (variant !== baseSubject && Object.prototype.hasOwnProperty.call(selected, variant)) {
+                    delete selected[variant];
+                }
+            });
+
+            if (chosen === undefined || chosen === null || chosen === 'all') {
+                delete selected[baseSubject];
+            } else {
+                const numeric = typeof chosen === 'string' ? parseInt(chosen, 10) : chosen;
+                if (Number.isNaN(numeric)) {
+                    delete selected[baseSubject];
+                } else {
+                    selected[baseSubject] = numeric;
+                }
+            }
+        });
+    }
+
     renderSkupinaFilters() {
         const section = document.getElementById('skupinaFiltersSection');
         const container = document.getElementById('skupinaFilters');
-        const subjectsMap = this.getSkupinasBySubject();
+        const meta = this.currentClassMeta || this.classMetaCache.get(this.selectedClass);
+        const baseSubjects = meta?.baseSubjects;
 
-        if (subjectsMap.size === 0) {
+        if (!baseSubjects || baseSubjects.size === 0) {
             section.style.display = 'none';
+            container.innerHTML = '';
             return;
         }
 
         let html = '<div class="grid grid-cols-[auto_1fr] sm:w-60 gap-x-4 gap-y-2 items-center">';
-        subjectsMap.forEach((skupinas, subject) => {
-            const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
+        let hasFilters = false;
+
+        baseSubjects.forEach((info, baseSubject) => {
+            const skupinaArray = info.skupinas || [];
             if (skupinaArray.length > 1) {
-                const selectedValue = this.selectedSkupine[subject] || 'all';
+                hasFilters = true;
+                const prefsKey = baseSubject;
+                const rawSelection = this.sessionSkupine[prefsKey];
+                const selectedValue = rawSelection === undefined ? 'all' : rawSelection;
+                const labelText = info.variants && info.variants.length > 1
+                    ? `${baseSubject} (${info.variants.join(', ')})`
+                    : baseSubject;
                 html += `
-                    <label class="text-right text-sm sm:text-base">${subject}:</label>
-                    <select onchange="app.filterSkupina('${subject.replace(/'/g, "\\'")}', this.value)" class="w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white">
+                    <label class="text-right text-sm sm:text-base">${labelText}:</label>
+                    <select onchange="app.filterSkupina('${prefsKey.replace(/'/g, "\\'")}', this.value)" class="w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white">
                         <option value="all" ${selectedValue === 'all' ? 'selected' : ''}>All</option>
                         ${skupinaArray.map(s => `<option value="${s}" ${selectedValue == s ? 'selected' : ''}>Skupina ${s}</option>`).join('')}
                     </select>
@@ -684,11 +998,15 @@ ${event}END:VCALENDAR`;
         });
         html += '</div>';
 
+        if (!hasFilters) {
+            section.style.display = 'none';
+            container.innerHTML = '';
+            return;
+        }
+
         container.innerHTML = html;
         section.style.display = 'block';
-        if (!this.skupinaFiltersExpanded) {
-            container.style.display = 'none';
-        }
+        container.style.display = this.skupinaFiltersExpanded ? 'block' : 'none';
     }
 
     toggleSkupinaFilters() {
@@ -710,14 +1028,18 @@ ${event}END:VCALENDAR`;
     }
 
     filterSkupina(subject, value) {
+        const baseSubject = this.getBaseSubjectName(subject);
         if (value === 'all') {
-            delete this.selectedSkupine[subject];
-            delete this.preferences.selectedSkupine[subject];
+            delete this.sessionSkupine[baseSubject];
         } else {
-            this.selectedSkupine[subject] = parseInt(value, 10);
-            this.preferences.selectedSkupine[subject] = parseInt(value, 10);
+            const parsed = parseInt(value, 10);
+            if (Number.isNaN(parsed)) {
+                delete this.sessionSkupine[baseSubject];
+            } else {
+                this.sessionSkupinaDirty = true; // flag that session deviates from defaults
+                this.sessionSkupine[baseSubject] = parsed;
+            }
         }
-        this.savePreferences();
         this.render();
     }
 
@@ -729,18 +1051,29 @@ ${event}END:VCALENDAR`;
         };
 
         const classSelect = document.getElementById('settingsClassSelect');
-        classSelect.innerHTML = this.availableClasses.map(cls =>
-            `<option value="${cls.value}" ${cls.value === this.selectedClass ? 'selected' : ''}>${cls.label}</option>`
-        ).join('');
+        if (!classSelect) return;
 
-        classSelect.onchange = async (e) => {
-            this.tempPreferences.defaultClass = e.target.value;
-            await this.fetchAllSkupinasForClass(e.target.value);
-            this.renderSettingsSubjects();
-            this.renderSettingsSkupine();
-        };
+        if (!Array.isArray(this.availableClasses) || this.availableClasses.length === 0) {
+            classSelect.innerHTML = '<option value="">Ni razredov na voljo</option>';
+            classSelect.disabled = true;
+            classSelect.onchange = null;
+        } else {
+            classSelect.disabled = false;
+            classSelect.innerHTML = this.availableClasses.map(cls =>
+                `<option value="${cls.value}" ${cls.value === this.selectedClass ? 'selected' : ''}>${cls.label}</option>`
+            ).join('');
 
-        await this.fetchAllSkupinasForClass(this.selectedClass);
+            classSelect.onchange = async (e) => {
+                this.tempPreferences.defaultClass = e.target.value;
+                const meta = await this.fetchClassMetadata(e.target.value, { force: true });
+                this.tempClassMeta = meta; // store for settings context
+                this.renderSettingsSubjects();
+                this.renderSettingsSkupine();
+            };
+        }
+
+        const initialMeta = await this.fetchClassMetadata(this.selectedClass, { setCurrent: true });
+        this.tempClassMeta = initialMeta;
         this.renderSettingsSubjects();
         this.renderSettingsSkupine();
         document.getElementById('settingsModal').style.display = 'flex';
@@ -748,14 +1081,13 @@ ${event}END:VCALENDAR`;
 
     renderSettingsSubjects() {
         const container = document.getElementById('settingsSubjectContainer');
-        const subjectsMap = this.allSkupinasMap || this.getSkupinasBySubject();
+        const effectiveSubjectsMap = this.tempClassMeta?.baseSubjects ? this.tempClassMeta.baseSubjects : this.currentClassMeta?.baseSubjects;
 
-        if (!subjectsMap || subjectsMap.size === 0) {
+        if (!effectiveSubjectsMap || effectiveSubjectsMap.size === 0) {
             container.innerHTML = '<p class="help-text">Nismo našli predmetov za ta razred.</p>';
             return;
         }
-
-        const subjects = Array.from(subjectsMap.keys()).sort();
+        const subjects = Array.from(effectiveSubjectsMap.keys()).sort();
 
         let html = '<div class="skupina-filters-grid">';
         subjects.forEach(subject => {
@@ -783,22 +1115,24 @@ ${event}END:VCALENDAR`;
 
     renderSettingsSkupine() {
         const container = document.getElementById('settingsSkupinaContainer');
-        const subjectsMap = this.allSkupinasMap || this.getSkupinasBySubject();
+        const meta = this.tempClassMeta || this.currentClassMeta || { baseSubjects: new Map() };
+        const subjectsMap = meta.baseSubjects;
 
-        if (subjectsMap.size === 0) {
+        if (!subjectsMap || subjectsMap.size === 0) {
             container.innerHTML = '<p class="help-text">Nismo našli skupin za ta razred.</p>';
             return;
         }
 
         let html = '<div class="settings-skupina-section"><h3>Default Skupine:</h3><div class="skupina-filters-grid">';
-        subjectsMap.forEach((skupinas, subject) => {
-            const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
+        subjectsMap.forEach((info, baseSubject) => {
+            const skupinaArray = info.skupinas || [];
             if (skupinaArray.length > 1) {
-                const selectedValue = this.tempPreferences?.selectedSkupine[subject] || this.selectedSkupine[subject] || 'all';
+                const prefsKey = baseSubject;
+                const selectedValue = this.tempPreferences?.selectedSkupine[prefsKey] ?? this.selectedSkupine[prefsKey] ?? 'all';
                 html += `
                     <div class="skupina-filter-item">
-                        <label>${subject}:</label>
-                        <select onchange="app.updateTempSkupina('${subject.replace(/'/g, "\\'")}', this.value)">
+                        <label>${baseSubject}:</label>
+                        <select onchange="app.updateTempSkupina('${prefsKey.replace(/'/g, "\\'")}', this.value)">
                             <option value="all" ${selectedValue === 'all' ? 'selected' : ''}>All</option>
                             ${skupinaArray.map(s => `<option value="${s}" ${selectedValue == s ? 'selected' : ''}>Skupina ${s}</option>`).join('')}
                         </select>
@@ -823,6 +1157,8 @@ ${event}END:VCALENDAR`;
 
     async fetchTimetableForClass(classValue) {
         try {
+            await this.fetchClassMetadata(classValue, { setCurrent: classValue === this.selectedClass });
+
             const url = `/api/timetable/${this.weekNumber}/${classValue}`;
             const response = await fetch(url);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -839,14 +1175,67 @@ ${event}END:VCALENDAR`;
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const skupinasData = await response.json();
 
-            this.allSkupinasMap = new Map();
+            const map = new Map();
             Object.keys(skupinasData).forEach(subject => {
-                this.allSkupinasMap.set(subject, new Set(skupinasData[subject]));
+                map.set(subject, new Set(skupinasData[subject]));
             });
+            return map;
         } catch (err) {
             console.error('Error fetching all skupinas:', err);
-            this.allSkupinasMap = new Map();
+            return new Map();
         }
+    }
+
+    async fetchClassMetadata(classValue, { force = false, setCurrent = false } = {}) {
+        const cached = this.classMetaCache.get(classValue);
+        if (cached && !force) {
+            if (setCurrent || classValue === this.selectedClass) {
+                this.currentClassMeta = cached;
+                this.allSkupinasMap = cached.subjectsMap;
+                this.normalizePreferencesWithMeta(cached, this);
+            }
+            if (this.tempPreferences) {
+                this.normalizePreferencesWithMeta(cached, this.tempPreferences);
+            }
+            return cached;
+        }
+
+        const subjectsMap = await this.fetchAllSkupinasForClass(classValue);
+
+        const baseSubjects = new Map();
+        subjectsMap.forEach((set, subject) => {
+            const baseName = this.getBaseSubjectName(subject);
+            if (!baseSubjects.has(baseName)) {
+                baseSubjects.set(baseName, { variants: new Set(), skupinas: new Set() });
+            }
+            const info = baseSubjects.get(baseName);
+            info.variants.add(subject);
+            set.forEach(s => info.skupinas.add(s));
+        });
+
+        baseSubjects.forEach(info => {
+            info.skupinas = Array.from(info.skupinas).sort((a, b) => a - b);
+            info.variants = Array.from(info.variants).sort();
+        });
+
+        const meta = {
+            subjectsMap,
+            baseSubjects
+        };
+
+        this.classMetaCache.set(classValue, meta);
+
+        if (setCurrent || classValue === this.selectedClass) {
+            this.currentClassMeta = meta;
+            this.allSkupinasMap = subjectsMap;
+            this.normalizePreferencesWithMeta(meta, this);
+        }
+
+        if (this.tempPreferences) {
+            this.normalizePreferencesWithMeta(meta, this.tempPreferences);
+        }
+
+        return meta;
     }
 
     saveSettings() {
@@ -873,9 +1262,18 @@ ${event}END:VCALENDAR`;
         this.onboardingCurrentStep = 1;
 
         const classSelect = document.getElementById('onboardingClassSelect');
-        classSelect.innerHTML = this.availableClasses.map(cls =>
-            `<option value="${cls.value}">${cls.label}</option>`
-        ).join('');
+        if (!classSelect) return;
+
+        if (!Array.isArray(this.availableClasses) || this.availableClasses.length === 0) {
+            classSelect.innerHTML = '<option value="">Ni razredov na voljo</option>';
+            classSelect.disabled = true;
+            classSelect.onchange = null;
+        } else {
+            classSelect.disabled = false;
+            classSelect.innerHTML = this.availableClasses.map(cls =>
+                `<option value="${cls.value}">${cls.label}</option>`
+            ).join('');
+        }
 
         document.getElementById('onboardingModal').style.display = 'flex';
         this.updateOnboardingStep();
@@ -924,9 +1322,11 @@ ${event}END:VCALENDAR`;
 
     async loadOnboardingSubjects() {
         const classValue = this.tempPreferences.defaultClass;
-        await this.fetchAllSkupinasForClass(classValue);
+    const meta = await this.fetchClassMetadata(classValue, { force: true });
+    this.tempClassMeta = meta;
 
-        const subjects = Array.from(this.allSkupinasMap.keys()).sort();
+    const baseSubjects = this.tempClassMeta?.baseSubjects || new Map();
+    const subjects = Array.from(baseSubjects.keys()).sort();
 
         const container = document.getElementById('onboardingSubjectContainer');
         if (subjects.length === 0) {
@@ -955,7 +1355,7 @@ ${event}END:VCALENDAR`;
         });
 
         const container = document.getElementById('onboardingSkupinaContainer');
-        const subjectsMap = this.allSkupinasMap;
+        const subjectsMap = this.tempClassMeta?.baseSubjects || this.currentClassMeta?.baseSubjects || new Map();
 
         if (!subjectsMap || subjectsMap.size === 0) {
             container.innerHTML = '<p class="help-text">No subjects with skupinas found.</p>';
@@ -965,16 +1365,16 @@ ${event}END:VCALENDAR`;
         let html = '<div class="skupina-filters-grid">';
         let hasSkupinas = false;
 
-        subjectsMap.forEach((skupinas, subject) => {
-            if (!this.tempPreferences.visibleSubjects[subject]) return;
+        subjectsMap.forEach((info, baseSubject) => {
+            if (!this.tempPreferences.visibleSubjects[baseSubject]) return;
 
-            const skupinaArray = Array.from(skupinas).sort((a, b) => a - b);
+            const skupinaArray = info.skupinas;
             if (skupinaArray.length > 1) {
                 hasSkupinas = true;
                 html += `
                     <div class="skupina-filter-item">
-                        <label>${subject}:</label>
-                        <select class="onboarding-skupina-select" data-subject="${subject}">
+                        <label>${baseSubject}:</label>
+                        <select class="onboarding-skupina-select" data-subject="${baseSubject}">
                             <option value="all">All</option>
                             ${skupinaArray.map(s => `<option value="${s}">Skupina ${s}</option>`).join('')}
                         </select>
@@ -992,39 +1392,49 @@ ${event}END:VCALENDAR`;
     }
 
     async completeOnboarding() {
-        this.selectedClass = this.tempPreferences.defaultClass;
-        this.preferences.defaultClass = this.selectedClass;
+        return (async () => {
+            this.selectedClass = this.tempPreferences.defaultClass;
+            this.preferences.defaultClass = this.selectedClass;
 
-        this.visibleSubjects = this.tempPreferences.visibleSubjects;
-        this.preferences.visibleSubjects = this.visibleSubjects;
+            this.visibleSubjects = this.tempPreferences.visibleSubjects;
+            this.preferences.visibleSubjects = this.visibleSubjects;
 
-        const skupinaSelects = document.querySelectorAll('.onboarding-skupina-select');
-        skupinaSelects.forEach(select => {
-            const subject = select.dataset.subject;
-            const value = select.value;
-            if (value !== 'all') {
-                this.selectedSkupine[subject] = parseInt(value, 10);
-                this.preferences.selectedSkupine[subject] = parseInt(value, 10);
+            const skupinaSelects = document.querySelectorAll('.onboarding-skupina-select');
+            skupinaSelects.forEach(select => {
+                const subject = select.dataset.subject;
+                const value = select.value;
+                if (value !== 'all') {
+                    this.selectedSkupine[subject] = parseInt(value, 10);
+                    this.preferences.selectedSkupine[subject] = parseInt(value, 10);
+                }
+            });
+
+            if (this.currentClassMeta) {
+                this.normalizePreferencesWithMeta(this.currentClassMeta, this);
             }
-        });
 
-        this.preferences.onboardingComplete = true;
-        this.savePreferences();
+            this.preferences.onboardingComplete = true;
+            this.savePreferences();
 
-        document.getElementById('onboardingModal').style.display = 'none';
-        this.tempPreferences = null;
-        await this.fetchTimetable();
+            document.getElementById('onboardingModal').style.display = 'none';
+            this.tempPreferences = null;
+            await this.fetchTimetable();
+        })();
     }
 
     shouldShowClass(cls) {
         if (!cls.subject) return true;
+        const base = this.getBaseSubjectName(cls.subject);
+        if (this.visibleSubjects[base] === false || this.visibleSubjects[cls.subject] === false) return false;
 
-        if (this.visibleSubjects[cls.subject] === false) return false;
+        if (cls.skupina === null || cls.skupina === undefined) return true;
 
-        if (cls.skupina === null) return true;
-        const selectedSkupina = this.selectedSkupine[cls.subject];
-        if (selectedSkupina === undefined) return true;
-        return cls.skupina === selectedSkupina;
+        const selectedSkupina = this.sessionSkupine[base]
+            ?? this.sessionSkupine[cls.subject]
+            ?? this.selectedSkupine[base]
+            ?? this.selectedSkupine[cls.subject];
+        if (selectedSkupina === undefined) return true; // no filter set -> show
+        return Number(cls.skupina) === Number(selectedSkupina);
     }
 
     render() {
@@ -1039,7 +1449,8 @@ ${event}END:VCALENDAR`;
                 subtitleHTML += `<br><small style="opacity: 0.7;">Updated: ${this.timetable.lastUpdated}</small>`;
             }
             document.getElementById('subtitle').innerHTML = subtitleHTML;
-            document.getElementById('exportAllBtn').style.display = 'flex';
+            const exportWrapper = document.getElementById('exportMenuWrapper');
+            if (exportWrapper) exportWrapper.style.display = 'flex';
         }
 
         const content = document.getElementById('content');
@@ -1108,7 +1519,7 @@ ${event}END:VCALENDAR`;
                     if (!this.shouldShowClass(cls)) return;
 
                     const classItem = document.createElement('div');
-                    classItem.className = 'p-3 rounded-lg not-last:mb-3 text-gray-800';
+                    classItem.className = 'p-3 rounded-lg not-last:mb-3 text-gray-800 relative';
                     classItem.style.backgroundColor = darkenColor(cls.color, 40) || '#D1D5DB';
 
                     classItem.innerHTML = `
@@ -1117,13 +1528,6 @@ ${event}END:VCALENDAR`;
                                 <span class="font-bold bg-indigo-500 text-white text-sm px-2 py-1 rounded-full">${cls.subject}</span>
                                 ${cls.note ? `<span class="text-xs italic">${cls.note}</span>` : ''}
                             </div>
-                            <button class="text-gray-500 hover:text-indigo-700 cursor-pointer" onclick="app.downloadICS(${dayIdx}, ${clsIdx})" title="Izvozi v koledar">
-                                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="7 10 12 15 17 10"></polyline>
-                                    <line x1="12" y1="15" x2="12" y2="3"></line>
-                                </svg>
-                            </button>
                         </div>
                         <div class="mt-3 text-sm flex flex-row gap-3">
                             <div class="flex items-center gap-2">
@@ -1142,6 +1546,14 @@ ${event}END:VCALENDAR`;
                             </div>` : ''}
                         </div>
                     `;
+                    if (this.eventExportMode) {
+                        const exportBtn = document.createElement('button');
+                        exportBtn.className = 'absolute top-2 right-2 text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded';
+                        exportBtn.textContent = 'ICS';
+                        exportBtn.title = 'Izvozi dogodek';
+                        exportBtn.addEventListener('click', (ev) => { ev.stopPropagation(); this.downloadICS(dayIdx, clsIdx); });
+                        classItem.appendChild(exportBtn);
+                    }
                     dayContent.appendChild(classItem);
                 });
             }
@@ -1150,6 +1562,21 @@ ${event}END:VCALENDAR`;
         });
 
         content.appendChild(daysFragment);
+
+        if (this.eventExportMode) {
+            const old = document.getElementById('exitEventExportContainer');
+            if (old) old.remove();
+            const exit = document.createElement('div');
+            exit.id = 'exitEventExportContainer';
+            exit.className = 'fixed bottom-4 right-4 flex gap-2 z-50';
+            exit.innerHTML = `<button class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white shadow-lg" id="exitEventExport">Končaj izbiranje</button>`;
+            document.body.appendChild(exit);
+            const btn = document.getElementById('exitEventExport');
+            if (btn) btn.onclick = () => this.disableEventExportMode();
+        } else {
+            const old = document.getElementById('exitEventExportContainer');
+            if (old) old.remove();
+        }
     }
 
     getTodayName() {

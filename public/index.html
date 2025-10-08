@@ -52,17 +52,31 @@
                         </svg>
                         <span class="hidden sm:inline ml-2">Danes</span>
                     </button>
-                    <button id="exportAllBtn"
-                        class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 cursor-pointer"
-                        style="display: none;">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                        <span class="hidden sm:inline ml-2">Vse</span>
-                    </button>
+                    <div class="relative" id="exportMenuWrapper" style="display:none;">
+                        <button id="exportMenuBtn"
+                            class="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 cursor-pointer"
+                            type="button">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                            <span class="hidden sm:inline">Izvoz</span>
+                        </button>
+                        <div id="exportDropdown" class="absolute right-0 mt-2 w-52 bg-[#1f1f2f] border border-gray-600 rounded-md shadow-lg z-20 hidden">
+                            <ul class="py-2 text-sm">
+                                <li>
+                                    <button class="w-full text-left px-4 py-2 hover:bg-gray-700" onclick="app.exportWeekICS()">Teden (vidno)</button>
+                                </li>
+                                <li>
+                                    <button class="w-full text-left px-4 py-2 hover:bg-gray-700" onclick="app.openDayExportModal()">Dnevi (izberi)</button>
+                                </li>
+                                <li>
+                                    <button class="w-full text-left px-4 py-2 hover:bg-gray-700" onclick="app.enableEventExportMode()">Posamezni dogodki</button>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
                     <button id="refreshBtn"
                         class="inline-flex items-center p-2 text-sm font-medium rounded-md bg-gray-700 hover:bg-gray-600 cursor-pointer">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -113,6 +127,17 @@
         </div>
 
         <div id="content" class="mt-6"></div>
+
+        <div id="dayExportModal" class="fixed inset-0 bg-black bg-opacity-60 items-center justify-center p-4 hidden">
+            <div class="bg-[#1a1a2e] w-full max-w-md rounded-lg shadow-xl p-6 text-white">
+                <h3 class="text-lg font-semibold mb-4">Izberi dneve za izvoz</h3>
+                <div id="dayExportCheckboxes" class="space-y-2 mb-4"></div>
+                <div class="flex justify-end gap-3">
+                    <button class="px-4 py-2 bg-gray-600 rounded hover:bg-gray-500" onclick="app.closeDayExportModal()">Prekliči</button>
+                    <button class="px-4 py-2 bg-green-600 rounded hover:bg-green-700" onclick="app.exportSelectedDaysICS()">Izvozi</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="settingsModal" style="display: none;"
@@ -165,7 +190,7 @@
             </div>
             <div class="p-6">
                 <div id="onboardingStep1">
-                    <p class="mb-4 text-gray-300">PRvo, izberite razred:</p>
+                    <p class="mb-4 text-gray-300">Najprej, izberite razred:</p>
                     <label for="onboardingClassSelect" class="block text-sm text-gray-400">Vaš razred:</label>
                     <select id="onboardingClassSelect"
                         class="mt-1 block w-full pl-3 pr-10 py-2 text-base focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border border-gray-500 bg-gray-700 text-white"></select>
