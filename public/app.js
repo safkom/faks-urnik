@@ -998,7 +998,8 @@ class TimetableApp {
             return;
         }
 
-        let html = '<div class="grid grid-cols-[auto_1fr] sm:w-60 gap-x-4 gap-y-2 items-center">';
+    // Widen filter layout for readability on small screens (remove narrow width cap)
+    let html = '<div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 items-center">';
         let hasFilters = false;
 
         baseSubjects.forEach((info, baseSubject) => {
@@ -1056,7 +1057,8 @@ class TimetableApp {
     filterSkupina(subject, value) {
         const baseSubject = this.getBaseSubjectName(subject);
         if (value === 'all') {
-            delete this.sessionSkupine[baseSubject];
+            // Store explicit sentinel so session choice overrides Settings defaults
+            this.sessionSkupine[baseSubject] = 'all';
         } else {
             const parsed = parseInt(value, 10);
             if (Number.isNaN(parsed)) {
@@ -1489,7 +1491,8 @@ class TimetableApp {
             ?? this.sessionSkupine[cls.subject]
             ?? this.selectedSkupine[base]
             ?? this.selectedSkupine[cls.subject];
-        if (selectedSkupina === undefined) return true; // no filter set -> show
+        // If an explicit 'all' is chosen in the session, always show regardless of Settings defaults
+        if (selectedSkupina === undefined || selectedSkupina === 'all') return true; // no filter set -> show
         return Number(cls.skupina) === Number(selectedSkupina);
     }
 
