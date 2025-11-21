@@ -1,7 +1,5 @@
-[!WARNING]
-⚠️ Stara različica aplikacije
-Ta projekt predstavlja zastarelo različico pregledovalnika urnikov ŠC Kranj, ki se ne uporablja več in se ne vzdržuje aktivno. Uporabljajte ga samo kot referenco ali arhiv.
-
+> ⚠️ **Opozorilo**
+> Ta repozitorij vsebuje **staro različico aplikacije**, ki se **ne uporablja več** in **ni več vzdrževana**. Uporabljajte ga samo kot referenco / arhiv.
 # ŠC Kranj Urnik - Pregledovalnik Urnikov
 
 Spletna aplikacija za pregledovanje urnikov Šolskega centra Kranj. Aplikacija omogoča pridobivanje in prikaz urnikov iz sistema ŠC Kranj (sckr.si) z možnostjo izvoza v koledar.
